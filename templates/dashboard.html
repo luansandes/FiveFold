@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<main class="shell">
+  <section class="hero-panel">
+    <div><p class="kicker">Agentic organisation · Dublin</p><h1>Opportunity,<br>made tangible.</h1><p>Exactly five agents turn local research into an auditable website concept and a human-ready proposal.</p></div>
+    <div class="hero-actions">
+      <form method="post" action="/api/worker/tick"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="limit" value="5"><button>Process next handoffs</button></form>
+      <form method="post" action="/api/demo/run-all"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Finish fixture demo</button></form>
+    </div>
+  </section>
+  <section class="metrics">
+    <article><span>{{ counts.total }}</span><p>Total prospects</p></article><article><span>{{ counts.running }}</span><p>In motion</p></article><article><span>{{ counts.curated }}</span><p>Manager curated</p></article><article><span>{{ counts.review }}</span><p>Human review</p></article>
+  </section>
+  <section class="agent-rail" aria-label="Five agent pipeline">
+    {% for item in [('01','Researcher','Find the signal'),('02','Designer','Shape the answer'),('03','Maker','Build the proof'),('04','Communicator','Tell the story'),('05','Manager','Create the value')] %}<div><b>{{ item[0] }}</b><strong>{{ item[1] }}</strong><span>{{ item[2] }}</span></div>{% endfor %}
+  </section>
+  <section class="grid-two">
+    <div>
+      <div class="section-head"><div><p class="kicker">Pipeline board</p><h2>Curated prospects</h2></div></div>
+      <div class="prospect-list">
+        {% for prospect in prospects %}
+        <a class="prospect-card" href="/prospects/{{ prospect.id }}">
+          <div><span class="status {{ prospect.status }}">{{ prospect.status|replace('_',' ') }}</span><h3>{{ prospect.business_name }}</h3><p>{{ prospect.category }} · {{ prospect.location }}</p></div>
+          <div class="card-meta"><span>{{ prospect.footprint|replace('_',' ') }}</span><b>{{ prospect.current_stage }}</b></div>
+        </a>
+        {% else %}<div class="empty"><h3>No prospects yet</h3><p>Start the fixture research run to demonstrate all five handoffs without external credentials.</p></div>{% endfor %}
+      </div>
+    </div>
+    <aside class="run-card">
+      <p class="kicker">New research run</p><h2>Find Dublin opportunities</h2>
+      <form method="post" action="/api/research-runs" class="stack">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label>Location<input name="location" value="Dublin, Ireland" required></label>
+        <label>Categories<textarea name="categories" rows="3">home services, beauty and wellness, local retail</textarea></label>
+        <label>Maximum businesses<input name="max_businesses" type="number" min="1" max="10" value="{{ default_prospects }}"></label>
+        <label>Provider<select name="provider"><option value="fixture">Fixture demonstration</option><option value="live">Live Google Places</option></select></label>
+        <button>Start research</button>
+      </form>
+      <p class="micro">Live mode requires configured Google Maps and OpenAI credentials. No agent sends messages or buys domains.</p>
+    </aside>
+  </section>
+</main>
+{% endblock %}
+

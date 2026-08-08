@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.coverage
+.env
+.env.local
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+.vercel/
+fivefold.db
+htmlcov/

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Fivefold Web{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/settings.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="logo" href="/"><span>V</span> Fivefold Web</a>
+    <nav><a href="/">Prospects</a><a href="/settings">Economics</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+  </header>
+  {% block content %}{% endblock %}
+</body>
+</html>

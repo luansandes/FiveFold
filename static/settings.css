@@ -1,0 +1,22 @@
+.settings-shell {
+  max-width: 980px;
+}
+
+.settings-shell > h1 {
+  font-size: clamp(3.5rem, 9vw, 7rem);
+  letter-spacing: -.07em;
+  line-height: .9;
+  margin: .3rem 0 1.5rem;
+}
+
+.price-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 700px) {
+  .price-grid {
+    grid-template-columns: 1fr;
+  }
+}
