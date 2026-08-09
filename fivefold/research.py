@@ -9,7 +9,6 @@ import httpx
 
 from fivefold.config import Settings
 from fivefold.contracts import WebsiteAudit
-from fivefold.fixtures import FIXTURE_PROSPECTS
 
 SOCIAL_HOSTS = {
     "facebook.com",
@@ -25,10 +24,6 @@ SOCIAL_HOSTS = {
 
 class ResearchProviderError(RuntimeError):
     pass
-
-
-def fixture_candidates(max_businesses: int) -> list[dict[str, Any]]:
-    return [dict(item) for item in FIXTURE_PROSPECTS[:max_businesses]]
 
 
 async def live_candidates(

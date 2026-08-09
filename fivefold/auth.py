@@ -22,9 +22,9 @@ def hash_password(password: str, iterations: int = 310_000) -> str:
     return f"pbkdf2_sha256${iterations}${base64.urlsafe_b64encode(salt).decode()}${base64.urlsafe_b64encode(digest).decode()}"
 
 
-def verify_password(password: str, encoded: str | None, app_env: str) -> bool:
+def verify_password(password: str, encoded: str | None) -> bool:
     if not encoded:
-        return app_env != "production" and hmac.compare_digest(password, "fivefold-demo")
+        return False
     try:
         algorithm, iterations_text, salt_text, digest_text = encoded.split("$", 3)
         if algorithm != "pbkdf2_sha256":
@@ -84,4 +84,3 @@ def check_login_rate_limit(client_key: str) -> None:
     if len(attempts) >= 8:
         raise HTTPException(status_code=429, detail="Too many login attempts")
     attempts.append(now)
-

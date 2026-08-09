@@ -1,0 +1,17 @@
+.git/
+.github/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.vercel/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.env
+.env.*
+!.env.example
+fivefold.db
+htmlcov/
+tests/

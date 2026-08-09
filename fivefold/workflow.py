@@ -27,7 +27,7 @@ from fivefold.models import (
     utcnow,
 )
 from fivefold.prompts import system_prompt
-from fivefold.research import fixture_candidates, live_candidates
+from fivefold.research import live_candidates
 
 
 class WorkflowError(RuntimeError):
@@ -110,7 +110,7 @@ async def create_research_run(
         location=request.location,
         categories=request.categories,
         max_businesses=max_businesses,
-        provider=request.provider,
+        provider="live",
         status="discovering",
     )
     session.add(run)
@@ -124,12 +124,8 @@ async def create_research_run(
     session.commit()
 
     try:
-        candidates = (
-            fixture_candidates(max_businesses)
-            if request.provider == "fixture"
-            else await live_candidates(
-                settings, request.location, request.categories, max_businesses
-            )
+        candidates = await live_candidates(
+            settings, request.location, request.categories, max_businesses
         )
         for candidate in candidates:
             prospect = Prospect(
@@ -144,17 +140,15 @@ async def create_research_run(
                 current_stage=Stage.RESEARCHER.value,
                 status="queued",
             )
-            # Fixture-only context is retained for deterministic agents. Live Google raw
-            # payloads are deliberately not stored.
-            if request.provider == "fixture":
-                prospect.human_note = canonical_json(
-                    {
-                        "audit": candidate["audit"],
-                        "review_themes": candidate["review_themes"],
-                        "opportunity_score": candidate["opportunity_score"],
-                        "palette": candidate.get("palette"),
-                    }
-                )
+            # Retain only the bounded qualification facts produced by the live adapter;
+            # raw Places responses and reviews are deliberately not stored.
+            prospect.human_note = canonical_json(
+                {
+                    "audit": candidate["audit"],
+                    "review_themes": candidate["review_themes"],
+                    "opportunity_score": candidate["opportunity_score"],
+                }
+            )
             session.add(prospect)
             session.flush()
             session.add(PipelineRun(prospect_id=prospect.id, status="queued"))
@@ -167,7 +161,7 @@ async def create_research_run(
                     "category": prospect.category,
                     "footprint": prospect.footprint,
                     "place_id": prospect.place_id,
-                    "provider": request.provider,
+                    "provider": "live",
                 },
                 prospect.id,
             )
@@ -184,14 +178,14 @@ async def create_research_run(
 
 
 def prospect_context(session: Session, prospect: Prospect) -> dict[str, Any]:
-    fixture: dict[str, Any] = {}
+    research_data: dict[str, Any] = {}
     if prospect.human_note.startswith("{"):
         import json
 
         try:
-            fixture = json.loads(prospect.human_note)
+            research_data = json.loads(prospect.human_note)
         except ValueError:
-            fixture = {}
+            research_data = {}
     pricing = session.scalar(select(PricingSetting).order_by(desc(PricingSetting.effective_at)).limit(1))
     return {
         "id": prospect.id,
@@ -202,10 +196,9 @@ def prospect_context(session: Session, prospect: Prospect) -> dict[str, Any]:
         "website_url": prospect.website_url,
         "footprint": prospect.footprint,
         "qualification_reason": prospect.qualification_reason,
-        "audit": fixture.get("audit", {"score": 0, "findings": []}),
-        "review_themes": fixture.get("review_themes", []),
-        "opportunity_score": fixture.get("opportunity_score", 70),
-        "palette": fixture.get("palette"),
+        "audit": research_data.get("audit", {"score": 0, "findings": []}),
+        "review_themes": research_data.get("review_themes", []),
+        "opportunity_score": research_data.get("opportunity_score", 70),
         "preview_path": prospect.preview_path,
         "pricing": pricing.values if pricing else {},
     }
@@ -297,7 +290,6 @@ async def process_job(session: Session, settings: Settings, job: Job) -> dict[st
     research_run = session.get(ResearchRun, prospect.research_run_id)
     if research_run is None:
         raise WorkflowError("Research run not found")
-    provider = research_run.provider
     runtime = AgentRuntime(settings)
     try:
         context = prospect_context(session, prospect)
@@ -312,7 +304,6 @@ async def process_job(session: Session, settings: Settings, job: Job) -> dict[st
             inputs,
             attempt,
             latest_revision_feedback(session, prospect.id, stage),
-            provider,
         )
         current_version = (
             session.scalar(
@@ -502,16 +493,4 @@ async def worker_tick(session: Session, settings: Settings, limit: int = 3) -> l
         if not job:
             break
         results.append(await process_job(session, settings, job))
-    return results
-
-
-async def run_fixture_to_completion(
-    session: Session, settings: Settings, max_ticks: int = 30
-) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    for _ in range(max_ticks):
-        tick = await worker_tick(session, settings, limit=10)
-        if not tick:
-            break
-        results.extend(tick)
     return results

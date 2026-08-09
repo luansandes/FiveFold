@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Stage(StrEnum):
@@ -47,7 +47,7 @@ class SourceReference(BaseModel):
 
 
 class UsageRecord(BaseModel):
-    model: str = "fixture"
+    model: str = "unknown"
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost_eur: float = 0.0
@@ -210,16 +210,15 @@ Envelope = ResearchEnvelope | DesignEnvelope | MakerEnvelope | CommunicationEnve
 
 
 class ResearchRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     location: str = "Dublin, Ireland"
-    categories: list[str] = Field(
-        default_factory=lambda: ["home services", "beauty and wellness", "local retail"]
-    )
-    max_businesses: int = Field(default=3, ge=1, le=10)
-    provider: Literal["fixture", "live"] = "fixture"
+    categories: list[str] = Field(default_factory=lambda: ["plumbers"])
+    max_businesses: int = Field(default=1, ge=1, le=10)
 
 
 class HumanStatusRequest(BaseModel):
-    status: Literal["verified", "contacted", "replied", "won", "lost"]
+    status: Literal["unverified", "verified", "contacted", "replied", "won", "lost"]
     note: str = ""
 
 

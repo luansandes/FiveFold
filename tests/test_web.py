@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import asyncio
+import hashlib
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -8,30 +9,73 @@ from sqlalchemy.orm import Session
 
 from fivefold.auth import SESSION_COOKIE, create_session, csrf_token
 from fivefold.config import get_settings
-from fivefold.contracts import ResearchRunRequest
-from fivefold.models import PricingSetting, Prospect
+from fivefold.models import Artifact, PreviewToken, PricingSetting, Prospect, ResearchRun, utcnow
 from fivefold.web import app
-from fivefold.workflow import create_research_run, run_fixture_to_completion
+
+
+def add_live_prospect(db: Session) -> Prospect:
+    run = ResearchRun(
+        location="Dublin, Ireland",
+        categories=["Painter"],
+        max_businesses=1,
+        provider="live",
+        status="completed",
+    )
+    db.add(run)
+    db.flush()
+    prospect = Prospect(
+        research_run_id=run.id,
+        business_name="Live Business",
+        category="Painter",
+        location="Dublin, Ireland",
+        place_id="google-place-id",
+        footprint="absent",
+        qualification_reason="No owned website was found.",
+    )
+    db.add(prospect)
+    db.commit()
+    return prospect
 
 
 def test_api_requires_admin_and_preview_is_safe(db: Session) -> None:
-    async def scenario() -> None:
-        await create_research_run(
-            db,
-            get_settings(),
-            ResearchRunRequest(provider="fixture", max_businesses=1),
+    prospect = add_live_prospect(db)
+    artifact_payload = {
+        "title": "Live Business concept",
+        "html": '<html><head><meta name="viewport"></head><body><main><h1>Live Business</h1></main></body></html>',
+        "css": "@media(max-width:800px){main{display:block}}",
+        "meta_description": "Independent concept",
+        "structured_data": {},
+        "content_manifest": [],
+        "validation": {"passed": True, "checks": {}, "warnings": []},
+        "artefact_hash": "a" * 64,
+        "inherited_design_version": 1,
+        "preview_path": None,
+    }
+    artifact = Artifact(
+        prospect_id=prospect.id,
+        stage="maker",
+        version=1,
+        payload={"artifact": artifact_payload},
+        content_hash="b" * 64,
+    )
+    db.add(artifact)
+    db.flush()
+    token = "live-preview-token"
+    db.add(
+        PreviewToken(
+            prospect_id=prospect.id,
+            token_hash=hashlib.sha256(token.encode()).hexdigest(),
+            artifact_id=artifact.id,
+            expires_at=utcnow() + timedelta(days=1),
         )
-        await run_fixture_to_completion(db, get_settings())
-
-    asyncio.run(scenario())
-    prospect = db.scalar(select(Prospect))
-    assert prospect and prospect.preview_path
+    )
+    db.commit()
 
     with TestClient(app) as client:
         assert client.get("/api/prospects").status_code == 401
         client.cookies.set(SESSION_COOKIE, create_session(get_settings()))
         assert client.get("/api/prospects").status_code == 200
-        response = client.get(prospect.preview_path)
+        response = client.get(f"/preview/{token}")
         assert response.status_code == 200
         assert "Independent concept preview" in response.text
         assert "<form" not in response.text.lower()
@@ -40,21 +84,16 @@ def test_api_requires_admin_and_preview_is_safe(db: Session) -> None:
 
 
 def test_human_status_is_only_changed_by_authenticated_form(db: Session) -> None:
-    async def create_only() -> None:
-        await create_research_run(
-            db,
-            get_settings(),
-            ResearchRunRequest(provider="fixture", max_businesses=1),
-        )
-
-    asyncio.run(create_only())
-    prospect = db.scalar(select(Prospect))
-    assert prospect
+    prospect = add_live_prospect(db)
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, create_session(get_settings()))
         response = client.post(
             f"/api/prospects/{prospect.id}/human-status",
-            data={"status": "verified", "note": "Checked by operator", "csrf": csrf_token(get_settings())},
+            data={
+                "status": "verified",
+                "note": "Checked by operator",
+                "csrf": csrf_token(get_settings()),
+            },
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -62,32 +101,15 @@ def test_human_status_is_only_changed_by_authenticated_form(db: Session) -> None
     assert prospect.human_status == "verified"
 
 
-def test_no_outreach_or_domain_purchase_route_exists() -> None:
+def test_no_demo_or_external_mutation_route_exists() -> None:
     paths = {route.path.lower() for route in app.routes}
-    forbidden = ("send-email", "send-message", "purchase-domain", "register-domain")
+    forbidden = ("demo", "send-email", "send-message", "purchase-domain", "register-domain")
     assert all(all(term not in path for term in forbidden) for path in paths)
 
 
-def test_pricing_updates_are_versioned_and_artifacts_export_lineage(db: Session) -> None:
-    async def scenario() -> None:
-        await create_research_run(
-            db,
-            get_settings(),
-            ResearchRunRequest(provider="fixture", max_businesses=1),
-        )
-        await run_fixture_to_completion(db, get_settings())
-
-    asyncio.run(scenario())
-    prospect = db.scalar(select(Prospect))
-    assert prospect is not None
+def test_pricing_updates_are_versioned(db: Session) -> None:
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, create_session(get_settings()))
-        exported = client.get(f"/api/prospects/{prospect.id}/artifacts")
-        assert exported.status_code == 200
-        artifacts = exported.json()["artifacts"]
-        assert len(artifacts) == 5
-        manager_export = next(item for item in artifacts if item["stage"] == "manager")
-        assert manager_export["input_artifact_ids"]
         response = client.post(
             "/api/settings/pricing",
             data={

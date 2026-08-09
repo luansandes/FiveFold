@@ -16,7 +16,9 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Session, No
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database_path.as_posix()}")
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("BASE_URL", "http://testserver")
-    monkeypatch.setenv("RESEARCH_PROVIDER", "fixture")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test-google-key")
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "test-password-hash")
     get_settings.cache_clear()
     reset_db_caches()
     init_db()
@@ -27,4 +29,3 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Session, No
         session.close()
         reset_db_caches()
         get_settings.cache_clear()
-

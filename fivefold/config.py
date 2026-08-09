@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,16 +19,8 @@ class Settings(BaseSettings):
     session_secret: str = "development-session-secret-change-me"
     cron_secret: str = "development-cron-secret-change-me"
     preview_signing_secret: str = "development-preview-secret-change-me"
-    research_provider: str = "fixture"
     max_prospects: int = Field(default=10, ge=1, le=10)
-    default_prospects: int = Field(default=3, ge=1, le=10)
-
-    @field_validator("research_provider")
-    @classmethod
-    def validate_provider(cls, value: str) -> str:
-        if value not in {"fixture", "live"}:
-            raise ValueError("RESEARCH_PROVIDER must be fixture or live")
-        return value
+    default_prospects: int = Field(default=1, ge=1, le=10)
 
     @property
     def is_production(self) -> bool:
@@ -47,4 +39,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

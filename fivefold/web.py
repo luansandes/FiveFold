@@ -43,7 +43,6 @@ from fivefold.workflow import (
     create_research_run,
     enqueue_job,
     latest_artifact,
-    run_fixture_to_completion,
     worker_tick,
 )
 
@@ -52,7 +51,7 @@ templates = Jinja2Templates(directory=str(ROOT / "templates"))
 DbSession = Annotated[Session, Depends(get_db)]
 
 DISCLOSURE = (
-    "Independent concept preview created by Fivefold Web for demonstration purposes. "
+    "Independent concept preview created by Fivefold Web. "
     "This is not the business’s official website and is not affiliated with or approved "
     "by the business. Do not submit personal information."
 )
@@ -61,6 +60,19 @@ DISCLOSURE = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     settings = get_settings()
+    missing_connections = [
+        name
+        for name, value in (
+            ("OPENAI_API_KEY", settings.openai_api_key),
+            ("GOOGLE_MAPS_API_KEY", settings.google_maps_api_key),
+            ("ADMIN_PASSWORD_HASH", settings.admin_password_hash),
+        )
+        if not value
+    ]
+    if missing_connections:
+        raise RuntimeError(
+            "Live configuration is required: " + ", ".join(missing_connections)
+        )
     if settings.is_production:
         defaults = [
             settings.session_secret.startswith("development-"),
@@ -142,7 +154,7 @@ def login(
     client_key = request.client.host if request.client else "unknown"
     check_login_rate_limit(client_key)
     if not verify_csrf(config, csrf, "login") or not verify_password(
-        password, config.admin_password_hash, config.app_env
+        password, config.admin_password_hash
     ):
         template_response = templates.TemplateResponse(
             request,
@@ -249,9 +261,8 @@ async def start_research(
     request: Request,
     db: DbSession,
     location: Annotated[str, Form()] = "Dublin, Ireland",
-    categories: Annotated[str, Form()] = "home services,beauty and wellness,local retail",
-    max_businesses: Annotated[int, Form()] = 3,
-    provider: Annotated[str, Form()] = "fixture",
+    categories: Annotated[str, Form()] = "plumbers",
+    max_businesses: Annotated[int, Form()] = 1,
     csrf: Annotated[str, Form()] = "",
 ) -> RedirectResponse:
     config = assert_admin(request)
@@ -260,7 +271,6 @@ async def start_research(
         location=location,
         categories=[item.strip() for item in categories.split(",") if item.strip()],
         max_businesses=max_businesses,
-        provider=provider,
     )
     await create_research_run(db, config, payload)
     return RedirectResponse("/", status_code=303)
@@ -322,18 +332,8 @@ async def cron_tick(request: Request, db: DbSession) -> JSONResponse:
     config = settings()
     if request.headers.get("authorization") != f"Bearer {config.cron_secret}":
         raise HTTPException(status_code=401, detail="Invalid cron secret")
-    results = await worker_tick(db, config, 3)
+    results = await worker_tick(db, config, 1)
     return JSONResponse({"processed": len(results), "results": results})
-
-
-@app.post("/api/demo/run-all")
-async def run_demo(
-    request: Request, db: DbSession, csrf: Annotated[str, Form()]
-) -> RedirectResponse:
-    config = assert_admin(request)
-    assert_csrf(request, csrf)
-    await run_fixture_to_completion(db, config)
-    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/api/prospects/{prospect_id}/retry")

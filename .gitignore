@@ -1,8 +1,8 @@
 __pycache__/
 *.py[cod]
 .coverage
-.env
-.env.local
+.env*
+!.env.example
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
