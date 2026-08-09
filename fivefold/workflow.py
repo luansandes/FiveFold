@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -195,7 +195,19 @@ async def create_research_run(
         session.commit()
         try:
             await publish_jobs(settings, queued_job_ids)
+            append_audit(
+                session,
+                "queue.published",
+                "workflow",
+                {"job_ids": queued_job_ids, "source": "research_run"},
+            )
+            session.commit()
         except QueuePublishError as exc:
+            session.execute(
+                update(Job)
+                .where(Job.id.in_(queued_job_ids), Job.status == "queued")
+                .values(status="publish_failed", last_error=str(exc))
+            )
             append_audit(
                 session,
                 "queue.publish_failed",
@@ -593,19 +605,48 @@ async def process_job_by_id(
 async def recover_queued_jobs(
     session: Session, settings: Settings, limit: int = 10
 ) -> list[str]:
-    stale_before = utcnow() - timedelta(minutes=5)
-    session.execute(
-        update(Job)
-        .where(Job.status == "running", Job.locked_at < stale_before)
-        .values(status="queued", locked_at=None, available_at=utcnow())
-    )
+    stale_before = utcnow() - timedelta(minutes=2)
     jobs = session.scalars(
         select(Job)
-        .where(Job.status == "queued", Job.available_at <= utcnow())
+        .where(
+            Job.available_at <= utcnow(),
+            or_(
+                Job.status == "publish_failed",
+                (Job.status == "queued") & (Job.created_at <= stale_before),
+            ),
+        )
         .order_by(Job.created_at)
         .limit(max(1, min(limit, 10)))
     ).all()
-    session.commit()
     job_ids = [job.id for job in jobs]
-    await publish_jobs(settings, job_ids)
+    if not job_ids:
+        return []
+    try:
+        await publish_jobs(settings, job_ids)
+    except QueuePublishError as exc:
+        session.execute(
+            update(Job)
+            .where(Job.id.in_(job_ids), Job.status.in_(("queued", "publish_failed")))
+            .values(status="publish_failed", last_error=str(exc))
+        )
+        append_audit(
+            session,
+            "queue.recovery_failed",
+            "admin",
+            {"job_ids": job_ids, "error": str(exc)},
+        )
+        session.commit()
+        raise
+    session.execute(
+        update(Job)
+        .where(Job.id.in_(job_ids), Job.status == "publish_failed")
+        .values(status="queued", last_error=None)
+    )
+    append_audit(
+        session,
+        "queue.recovered",
+        "admin",
+        {"job_ids": job_ids, "count": len(job_ids)},
+    )
+    session.commit()
     return job_ids

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
+import * as queueConsumer from "../api/queue_consumer";
 import { publishStageJobs } from "../api/queue_publish";
 
 type ResponseCapture = {
@@ -33,6 +34,11 @@ function captureResponse(): ResponseCapture {
     response,
   };
 }
+
+test("queue consumer uses the Web-style named POST contract", () => {
+  assert.equal(typeof queueConsumer.POST, "function");
+  assert.equal("default" in queueConsumer, false);
+});
 
 test("publishes every job with its database ID as the idempotency key", async () => {
   process.env.CRON_SECRET = "queue-test-secret";

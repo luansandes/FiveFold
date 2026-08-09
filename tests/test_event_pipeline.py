@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
@@ -16,8 +17,8 @@ from fivefold.contracts import (
     ResearchEnvelope,
     Stage,
 )
-from fivefold.models import Job, PipelineRun, Prospect, ResearchRun
-from fivefold.workflow import enqueue_job, process_job_by_id
+from fivefold.models import AuditEvent, Job, PipelineRun, Prospect, ResearchRun
+from fivefold.workflow import enqueue_job, process_job_by_id, recover_queued_jobs
 
 
 def agent_outputs() -> list[object]:
@@ -202,3 +203,57 @@ def test_event_driven_chain_processes_all_five_agents(db: Session) -> None:
     db.refresh(prospect)
     assert prospect.status == "curated"
     assert len(db.scalars(select(Job).where(Job.prospect_id == prospect.id)).all()) == 5
+
+
+def test_recovery_republishes_only_stalled_jobs_with_existing_ids(db: Session) -> None:
+    run = ResearchRun(
+        location="Dublin, Ireland",
+        categories=["Painter"],
+        max_businesses=1,
+        opportunity_threshold=90,
+        provider="live",
+        status="completed",
+    )
+    db.add(run)
+    db.flush()
+    prospect = Prospect(
+        research_run_id=run.id,
+        business_name="Stalled Business",
+        category="Painter",
+        place_id="stalled-place",
+        footprint="absent",
+        qualification_reason="No owned website was found.",
+    )
+    db.add(prospect)
+    db.flush()
+    stalled = enqueue_job(db, prospect, Stage.RESEARCHER)
+    stalled.created_at = stalled.created_at - timedelta(minutes=3)
+    current = Job(
+        prospect_id=prospect.id,
+        stage=Stage.RESEARCHER.value,
+        status="queued",
+        idempotency_key="current-job",
+    )
+    failed = Job(
+        prospect_id=prospect.id,
+        stage=Stage.RESEARCHER.value,
+        status="publish_failed",
+        idempotency_key="publish-failed-job",
+        last_error="publisher unavailable",
+    )
+    db.add_all([current, failed])
+    db.commit()
+
+    async def scenario() -> None:
+        with patch("fivefold.workflow.publish_jobs", new=AsyncMock()) as publisher:
+            recovered = await recover_queued_jobs(db, get_settings(), 10)
+            assert recovered == [stalled.id, failed.id]
+            publisher.assert_awaited_once_with(get_settings(), [stalled.id, failed.id])
+
+    asyncio.run(scenario())
+    db.refresh(failed)
+    assert failed.status == "queued"
+    assert failed.last_error is None
+    assert db.scalar(
+        select(AuditEvent).where(AuditEvent.event_type == "queue.recovered")
+    ) is not None

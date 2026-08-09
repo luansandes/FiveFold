@@ -22,11 +22,5 @@
       "source": "/(.*)",
       "destination": "/api/index"
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/worker/tick",
-      "schedule": "17 14 * * *"
-    }
   ]
 }

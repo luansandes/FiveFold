@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -232,10 +232,43 @@ def dashboard(request: Request, db: DbSession) -> HTMLResponse:
         or 0,
     }
     operational = current_operational_setting(db)
+    stalled_before = utcnow() - timedelta(minutes=2)
     queue_counts = {
         state: db.scalar(select(func.count()).select_from(Job).where(Job.status == state)) or 0
-        for state in ("queued", "running", "failed")
+        for state in ("queued", "running", "failed", "publish_failed")
     }
+    queue_counts["stalled"] = (
+        db.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.status == "queued", Job.created_at <= stalled_before)
+        )
+        or 0
+    )
+    if queue_counts["publish_failed"]:
+        queue_health = {
+            "state": "failed",
+            "label": "Queue publication failed",
+            "recoverable": True,
+        }
+    elif queue_counts["stalled"]:
+        queue_health = {
+            "state": "stalled",
+            "label": f"{queue_counts['stalled']} stalled job(s)",
+            "recoverable": True,
+        }
+    elif queue_counts["running"] or queue_counts["queued"]:
+        queue_health = {
+            "state": "processing",
+            "label": "Automatic processing active",
+            "recoverable": False,
+        }
+    else:
+        queue_health = {
+            "state": "healthy",
+            "label": "Queue healthy",
+            "recoverable": False,
+        }
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -250,6 +283,7 @@ def dashboard(request: Request, db: DbSession) -> HTMLResponse:
             "csrf": csrf_token(settings()),
             "operational": operational,
             "queue_counts": queue_counts,
+            "queue_health": queue_health,
             "authenticated": True,
             "active_page": "dashboard",
         },
@@ -401,13 +435,23 @@ def get_prospect(request: Request, prospect_id: str, db: DbSession) -> dict[str,
     return result
 
 
-@app.get("/api/worker/tick")
-async def cron_tick(request: Request, db: DbSession) -> JSONResponse:
-    config = settings()
-    if request.headers.get("authorization") != f"Bearer {config.cron_secret}":
-        raise HTTPException(status_code=401, detail="Invalid cron secret")
-    job_ids = await recover_queued_jobs(db, config, 10)
-    return JSONResponse({"republished": len(job_ids), "job_ids": job_ids})
+@app.post("/api/admin/queue/recover")
+async def recover_stalled_queue(
+    request: Request,
+    db: DbSession,
+    csrf: Annotated[str, Form()],
+) -> RedirectResponse:
+    config = assert_admin(request)
+    assert_csrf(request, csrf)
+    from fivefold.queueing import QueuePublishError
+
+    try:
+        job_ids = await recover_queued_jobs(db, config, 10)
+    except QueuePublishError:
+        return RedirectResponse("/?queue_recovery=failed", status_code=303)
+    return RedirectResponse(
+        f"/?queue_recovery=completed&republished={len(job_ids)}", status_code=303
+    )
 
 
 @app.post("/api/internal/jobs/{job_id}/process")
@@ -450,7 +494,7 @@ def reset_generated_records(request: Request) -> JSONResponse:
 
 
 @app.post("/api/prospects/{prospect_id}/retry")
-def retry_prospect(
+async def retry_prospect(
     request: Request,
     prospect_id: str,
     db: DbSession,
@@ -463,8 +507,30 @@ def retry_prospect(
         raise HTTPException(status_code=404, detail="Prospect not found")
     prospect.revision_count += 1
     prospect.status = "queued"
-    enqueue_job(db, prospect, Stage(prospect.current_stage))
+    job = enqueue_job(db, prospect, Stage(prospect.current_stage))
     append_audit(db, "prospect.retry_requested", "admin", {}, prospect.id)
+    db.commit()
+    from fivefold.queueing import QueuePublishError, publish_jobs
+
+    try:
+        await publish_jobs(settings(), [job.id])
+        append_audit(
+            db,
+            "queue.published",
+            "admin",
+            {"job_ids": [job.id], "source": "prospect_retry"},
+            prospect.id,
+        )
+    except QueuePublishError as exc:
+        job.status = "publish_failed"
+        job.last_error = str(exc)
+        append_audit(
+            db,
+            "queue.publish_failed",
+            "admin",
+            {"job_ids": [job.id], "error": str(exc)},
+            prospect.id,
+        )
     db.commit()
     return RedirectResponse(f"/prospects/{prospect_id}", status_code=303)
 

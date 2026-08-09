@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -12,6 +13,7 @@ from fivefold.config import get_settings
 from fivefold.models import (
     Artifact,
     Handoff,
+    Job,
     PreviewToken,
     PricingSetting,
     Prospect,
@@ -239,3 +241,56 @@ def test_pipeline_settings_are_database_backed(db: Session) -> None:
         updated = client.get("/api/settings/pipeline").json()
         assert updated["max_prospects_per_run"] == 2
         assert updated["opportunity_score_threshold"] == 91
+
+
+def test_stalled_queue_recovery_is_admin_only_and_visible(db: Session) -> None:
+    prospect = add_live_prospect(db)
+    job = Job(
+        prospect_id=prospect.id,
+        stage="researcher",
+        status="queued",
+        idempotency_key="stalled-dashboard-job",
+        created_at=utcnow() - timedelta(minutes=3),
+    )
+    db.add(job)
+    db.commit()
+
+    with TestClient(app) as client:
+        unauthorized = client.post(
+            "/api/admin/queue/recover",
+            data={"csrf": csrf_token(get_settings())},
+            follow_redirects=False,
+        )
+        assert unauthorized.status_code == 401
+
+        client.cookies.set(SESSION_COOKIE, create_session(get_settings()))
+        dashboard = client.get("/")
+        assert "Recover stalled jobs" in dashboard.text
+        with patch(
+            "fivefold.web.recover_queued_jobs",
+            new=AsyncMock(return_value=[job.id]),
+        ) as recover:
+            response = client.post(
+                "/api/admin/queue/recover",
+                data={"csrf": csrf_token(get_settings())},
+                follow_redirects=False,
+            )
+        assert response.status_code == 303
+        assert response.headers["location"].endswith("republished=1")
+        recover.assert_awaited_once()
+
+
+def test_prospect_retry_publishes_the_new_job(db: Session) -> None:
+    prospect = add_live_prospect(db)
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, create_session(get_settings()))
+        with patch("fivefold.queueing.publish_jobs", new=AsyncMock()) as publisher:
+            response = client.post(
+                f"/api/prospects/{prospect.id}/retry",
+                data={"csrf": csrf_token(get_settings())},
+                follow_redirects=False,
+            )
+        assert response.status_code == 303
+        published_ids = publisher.await_args.args[1]
+        assert len(published_ids) == 1
+        assert db.get(Job, published_ids[0]) is not None

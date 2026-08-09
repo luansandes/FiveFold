@@ -4,7 +4,15 @@
 <main class="admin-main">
   <header class="page-heading">
     <div><p class="eyebrow">Operations overview</p><h1>Pipeline control</h1><p>Monitor prospects, agent execution, handoffs, and items requiring a human decision.</p></div>
-    <div class="page-actions"><span class="queue-live"><i></i>Automatic handoffs active</span></div>
+    <div class="page-actions">
+      <span class="queue-live {{ queue_health.state }}"><i></i>{{ queue_health.label }}</span>
+      {% if queue_health.recoverable %}
+      <form method="post" action="/api/admin/queue/recover">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="secondary">Recover stalled jobs</button>
+      </form>
+      {% endif %}
+    </div>
   </header>
 
   <section class="metric-grid" aria-label="Pipeline metrics">
@@ -75,7 +83,7 @@
         {% else %}<p class="empty-note">Handoffs will appear here after the first agent stage completes.</p>{% endfor %}
       </section>
       <section class="panel compact-panel">
-        <div class="panel-head"><div><h2>Research activity</h2><p>Queue: {{ queue_counts.queued }} ready · {{ queue_counts.running }} running · {{ queue_counts.failed }} failed</p></div></div>
+        <div class="panel-head"><div><h2>Research activity</h2><p>Queue: {{ queue_counts.queued }} ready · {{ queue_counts.running }} running · {{ queue_counts.publish_failed + queue_counts.failed }} failed</p></div></div>
         {% for run in recent_runs %}<div class="run-row"><span class="status {{ run.status }}">{{ run.status }}</span><div><b>{{ run.categories|join(', ') }}</b><small>{{ run.created_count }} created · {{ run.duplicates_skipped }} duplicate{% if run.duplicates_skipped != 1 %}s{% endif %} skipped</small>{% if run.error %}<small class="error-text">{{ run.error }}</small>{% endif %}</div></div>{% else %}<p class="empty-note">No live research runs recorded.</p>{% endfor %}
       </section>
     </div>
