@@ -8,11 +8,31 @@
   <link rel="stylesheet" href="/static/settings.css">
   <script src="/static/app.js" defer></script>
 </head>
-<body>
-  <header class="app-header">
-    <a class="logo" href="/"><span>V</span> Fivefold Web</a>
-    <nav><a href="/">Prospects</a><a href="/settings">Economics</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
-  </header>
-  {% block content %}{% endblock %}
+<body class="{% if authenticated %}admin-body{% endif %}">
+  {% if authenticated %}
+  <div class="admin-layout">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Fivefold Web operations">
+        <span class="brand-mark">V</span><span><b>Fivefold</b><small>Operations</small></span>
+      </a>
+      <nav class="sidebar-nav" aria-label="Administration">
+        <a class="{% if active_page == 'dashboard' %}active{% endif %}" href="/"><span class="nav-icon">▦</span>Overview</a>
+        <a class="{% if active_page == 'prospects' %}active{% endif %}" href="/"><span class="nav-icon">◎</span>Prospects</a>
+        <a class="{% if active_page == 'settings' %}active{% endif %}" href="/settings"><span class="nav-icon">€</span>Economics</a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="system-state"><i></i><span><b>Live providers</b><small>Google + OpenAI</small></span></div>
+        <form method="post" action="/api/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="nav-button">Sign out</button></form>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><span>Five-agent prospect pipeline</span><span class="human-lock">Human-controlled outreach</span></header>
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+  {% else %}
+  <header class="public-header"><a class="brand" href="/"><span class="brand-mark">V</span><b>Fivefold Web</b></a></header>
+  {% block public_content %}{% endblock %}
+  {% endif %}
 </body>
 </html>

@@ -1,35 +1,73 @@
 {% extends "base.html" %}
 {% block title %}{{ prospect.business_name }} · Fivefold Web{% endblock %}
 {% block content %}
-<main class="shell detail-shell">
-  <a class="back" href="/">← Prospect board</a>
-  <section class="detail-hero">
-    <div><span class="status {{ prospect.status }}">{{ prospect.status|replace('_',' ') }}</span><p class="kicker">{{ prospect.category }} · {{ prospect.location }}</p><h1>{{ prospect.business_name }}</h1><p>{{ prospect.qualification_reason }}</p></div>
-    <div class="score-card"><span>{{ prospect.priority }}</span><p>Manager priority</p><b>{{ prospect.revision_count }}</b><p>Correction loops</p></div>
+<main class="admin-main prospect-main">
+  <div class="breadcrumb"><a href="/">Overview</a><span>/</span><span>Prospects</span><span>/</span><b>{{ prospect.business_name }}</b></div>
+  <header class="prospect-heading">
+    <div><div class="heading-labels"><span class="status {{ prospect.status }}">{{ prospect.status|replace('_',' ') }}</span><span class="plain-label">{{ prospect.footprint|replace('_',' ') }}</span></div><h1>{{ prospect.business_name }}</h1><p>{{ prospect.category }} · {{ prospect.location }}</p><p class="qualification">{{ prospect.qualification_reason }}</p></div>
+    <div class="prospect-kpis"><div><span>Priority</span><strong>{{ prospect.priority|title }}</strong></div><div><span>Human status</span><strong>{{ prospect.human_status|replace('_',' ')|title }}</strong></div><div><span>Revisions</span><strong>{{ prospect.revision_count }}/2</strong></div></div>
+  </header>
+
+  <section class="panel pipeline-detail" aria-label="Agent pipeline">
+    <div class="panel-head"><div><h2>Agent path</h2><p>Every output must become the next agent's input</p></div><span class="status {% if audit_valid %}curated{% else %}failed{% endif %}">{% if audit_valid %}audit chain valid{% else %}audit warning{% endif %}</span></div>
+    <div class="agent-path">
+      {% for stage in stages %}{% set artifact = latest[stage.value] %}
+      <div class="agent-node {% if artifact %}complete{% elif prospect.current_stage == stage.value %}current{% endif %}">
+        <div class="node-icon">{{ 'O' if stage.value == 'manager' else stage.value[:1]|upper }}</div><div><span>0{{ loop.index }} · {{ stage.value|title }}</span><strong>{% if artifact %}Output v{{ artifact.version }}{% elif prospect.current_stage == stage.value %}Current stage{% else %}Waiting{% endif %}</strong>{% if artifact %}<small>Hash {{ artifact.content_hash[:10] }}</small>{% endif %}</div>
+      </div>
+      {% if not loop.last %}<div class="path-connector {% if artifact %}passed{% endif %}">→</div>{% endif %}
+      {% endfor %}
+    </div>
   </section>
-  <section class="timeline">
-    {% for stage in stages %}
-    {% set artifact = latest[stage.value] %}
-    <article class="timeline-node {% if artifact %}done{% elif prospect.current_stage == stage.value %}active{% endif %}">
-      <span>0{{ loop.index }}</span><h3>{{ stage.value|title }}</h3><p>{% if artifact %}v{{ artifact.version }} · {{ artifact.content_hash[:8] }}{% elif prospect.current_stage == stage.value %}Current stage{% else %}Waiting{% endif %}</p>
-    </article>
-    {% endfor %}
-  </section>
-  <section class="detail-grid">
-    <div class="main-column">
-      {% for stage in stages %}{% set record = latest[stage.value] %}{% if record %}
-      <details class="artifact" {% if stage.value == 'manager' %}open{% endif %}><summary><div><span class="kicker">{{ stage.value }} artefact</span><h2>{{ stage.value|title }} output</h2></div><b>v{{ record.version }}</b></summary><pre>{{ record.payload|tojson(indent=2) }}</pre></details>
-      {% endif %}{% endfor %}
-      <section class="audit-panel"><div class="section-head"><div><p class="kicker">Immutable history</p><h2>Audit trail</h2></div><span class="status {% if audit_valid %}curated{% else %}failed{% endif %}">{% if audit_valid %}chain valid{% else %}chain warning{% endif %}</span></div>
-        {% for event in events %}<div class="audit-row"><time>{{ event.created_at.strftime('%d %b %H:%M') }}</time><div><b>{{ event.event_type }}</b><p>{{ event.actor }} · {{ event.content_hash[:12] }}</p></div></div>{% endfor %}
+
+  <section class="prospect-layout">
+    <div class="primary-column">
+      <section class="panel" id="handoffs">
+        <div class="panel-head"><div><h2>Agent handoff log</h2><p>Decisions, destinations, and reasons recorded by each agent</p></div><span class="panel-meta">{{ handoffs|length }} handoff{% if handoffs|length != 1 %}s{% endif %}</span></div>
+        <div class="handoff-ledger">
+          {% for handoff in handoffs %}
+          <article class="handoff-card {{ handoff.decision }}">
+            <div class="handoff-time"><time>{{ handoff.created_at.strftime('%d %b %Y') }}</time><span>{{ handoff.created_at.strftime('%H:%M:%S') }}</span></div>
+            <div class="handoff-agents"><div><i>{{ handoff.from_stage[:1]|upper }}</i><span>From</span><b>{{ handoff.from_stage|title }}</b></div><span class="handoff-arrow">→</span><div><i>{{ handoff.to_stage[:1]|upper if handoff.to_stage else '✓' }}</i><span>To</span><b>{{ handoff.to_stage|title if handoff.to_stage else 'Pipeline complete' }}</b></div></div>
+            <div class="handoff-decision"><span class="decision-badge">{{ handoff.decision|replace('_',' ') }}</span><p>{{ handoff.reason }}</p></div>
+          </article>
+          {% else %}<div class="empty-state"><b>No handoffs recorded</b><p>Complete the Researcher stage to create the first Researcher → Designer handoff.</p></div>{% endfor %}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><div><h2>Agent run history</h2><p>Prompt, inputs, output, usage, and execution state</p></div></div>
+        <div class="table-wrap"><table class="admin-table run-history"><thead><tr><th>Agent</th><th>Status</th><th>Attempt</th><th>Input artefacts</th><th>Output artefact</th><th>Tokens</th><th>Prompt</th><th>Completed</th></tr></thead><tbody>
+        {% for run in stage_runs %}<tr><td><span class="agent-cell"><i>{{ run.stage[:1]|upper }}</i>{{ run.stage|title }}</span>{% if run.error %}<small class="error-text">{{ run.error }}</small>{% endif %}</td><td><span class="status {{ run.status }}">{{ run.status }}</span></td><td>#{{ run.attempt }}</td><td><code>{{ run.input_artifact_ids|length }} linked</code></td><td><code>{{ run.output_artifact_id[:8] if run.output_artifact_id else '—' }}</code></td><td>{{ (run.usage.input_tokens|default(0)) + (run.usage.output_tokens|default(0)) }}</td><td><code>{{ run.prompt_version[:8] }}</code></td><td>{{ run.completed_at.strftime('%d %b %H:%M') if run.completed_at else 'Running' }}</td></tr>
+        {% else %}<tr><td colspan="8" class="empty-table">No agent runs recorded.</td></tr>{% endfor %}
+        </tbody></table></div>
+      </section>
+
+      {% if latest.manager %}{% set decision = latest.manager.payload.artifact %}
+      <section class="panel manager-decision">
+        <div class="panel-head"><div><p class="eyebrow">Final agent output</p><h2>ManagerDecision</h2></div><span class="priority priority-{{ decision.priority }}">{{ decision.priority }} priority</span></div>
+        <div class="decision-grid"><div><span>Disposition</span><strong>{{ decision.disposition|replace('_',' ')|title }}</strong></div><div><span>Annual revenue</span><strong>€{{ '%.2f'|format(decision.profitability.annual_revenue_eur) }}</strong></div><div><span>Contribution</span><strong>€{{ '%.2f'|format(decision.profitability.contribution_eur) }}</strong></div><div><span>Gross margin</span><strong>{{ '%.1f'|format(decision.profitability.gross_margin_percent) }}%</strong></div></div>
+        <div class="executive-summary"><h3>Executive summary</h3><p>{{ decision.executive_summary }}</p><h3>Next human action</h3><p>{{ decision.next_human_action }}</p></div>
+      </section>{% endif %}
+
+      <section class="panel artefact-section">
+        <div class="panel-head"><div><h2>Versioned artefacts</h2><p>Structured outputs preserved exactly as produced</p></div></div>
+        {% for stage in stages %}{% set record = latest[stage.value] %}{% if record %}
+        <details class="artifact"><summary><div><span class="agent-cell"><i>{{ stage.value[:1]|upper }}</i>{{ stage.value|title }} output</span><small>Created {{ record.created_at.strftime('%d %b %Y %H:%M') }}</small></div><div><b>v{{ record.version }}</b><code>{{ record.content_hash[:10] }}</code></div></summary><pre>{{ record.payload|tojson(indent=2) }}</pre></details>
+        {% endif %}{% endfor %}
+      </section>
+
+      <section class="panel audit-panel"><div class="panel-head"><div><h2>Append-only audit trail</h2><p>Hash-linked operational events</p></div><span class="status {% if audit_valid %}curated{% else %}failed{% endif %}">{% if audit_valid %}chain valid{% else %}chain warning{% endif %}</span></div>
+        <div class="audit-list">{% for event in events %}<div class="audit-row"><time>{{ event.created_at.strftime('%d %b %H:%M:%S') }}</time><div><b>{{ event.event_type|replace('.',' / ') }}</b><p>{{ event.actor }} · {{ event.content_hash[:12] }}</p></div></div>{% else %}<p class="empty-note">No audit events recorded.</p>{% endfor %}</div>
       </section>
     </div>
-    <aside class="side-column">
-      {% if prospect.preview_path %}<section class="action-card"><p class="kicker">Tangible output</p><h2>Concept preview</h2><a class="button-link" href="{{ prospect.preview_path }}" target="_blank" rel="noopener">Open shareable preview ↗</a><p class="micro">{{ base_url }}{{ prospect.preview_path }}</p></section>{% endif %}
-      {% if latest.communicator %}<section class="action-card"><p class="kicker">Human-ready draft</p><h2>Outreach copy</h2><textarea id="outreach-draft" rows="10" readonly>{{ latest.communicator.payload.artifact.email_draft }}</textarea><button type="button" data-copy-target="outreach-draft">Copy draft</button><p class="micro">Copying never sends the message. A human must verify the contact and perform all outreach.</p></section>{% endif %}
-      <section class="action-card"><p class="kicker">Human control</p><h2>Outreach state</h2><form method="post" action="/api/prospects/{{ prospect.id }}/human-status" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><select name="status">{% for state in ['unverified','verified','contacted','replied','won','lost'] %}<option {% if state == prospect.human_status %}selected{% endif %}>{{ state }}</option>{% endfor %}</select><textarea name="note" placeholder="Human note">{{ prospect.human_note if not prospect.human_note.startswith('{') else '' }}</textarea><button>Save human status</button></form></section>
-      <section class="action-card"><p class="kicker">Operations</p><div class="stack"><form method="post" action="/api/prospects/{{ prospect.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Retry current stage</button></form>{% if prospect.preview_path %}<form method="post" action="/api/prospects/{{ prospect.id }}/revoke-preview"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Revoke preview</button></form>{% endif %}<a class="button-link secondary" href="/api/prospects/{{ prospect.id }}/artifacts">Download artefacts JSON</a><a class="button-link secondary" href="/api/prospects/{{ prospect.id }}/audit">Download audit JSON</a></div></section>
-      <section class="action-card warning"><p class="kicker">Privacy</p><p>Redaction removes direct identifiers and revokes previews while retaining accountability metadata.</p><form method="post" action="/api/prospects/{{ prospect.id }}/redact" data-confirm="Redact this prospect?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">Redact prospect</button></form></section>
+
+    <aside class="control-column">
+      {% if prospect.preview_path %}<section class="panel control-card"><p class="eyebrow">Website artefact</p><h2>Concept preview</h2><p>Unlisted, revocable, and clearly marked as an independent concept.</p><a class="button-link" href="{{ prospect.preview_path }}" target="_blank" rel="noopener">Open preview ↗</a><small class="url-text">{{ base_url }}{{ prospect.preview_path }}</small></section>{% endif %}
+      {% if latest.communicator %}<section class="panel control-card"><p class="eyebrow">Communicator output</p><h2>Human-ready outreach</h2><label>Email draft<textarea id="outreach-draft" rows="9" readonly>{{ latest.communicator.payload.artifact.email_draft }}</textarea></label><button type="button" data-copy-target="outreach-draft">Copy draft</button><p class="safety-note">Copy only. The system cannot send messages.</p></section>{% endif %}
+      <section class="panel control-card"><p class="eyebrow">Human control</p><h2>Outreach state</h2><form method="post" action="/api/prospects/{{ prospect.id }}/human-status" class="form-stack"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Status<select name="status">{% for state in ['unverified','verified','contacted','replied','won','lost'] %}<option {% if state == prospect.human_status %}selected{% endif %}>{{ state }}</option>{% endfor %}</select></label><label>Operator note<textarea name="note" rows="3" placeholder="Human note">{{ prospect.human_note if not prospect.human_note.startswith('{') else '' }}</textarea></label><button>Save status</button></form></section>
+      <section class="panel control-card"><p class="eyebrow">Operations</p><div class="form-stack"><form method="post" action="/api/prospects/{{ prospect.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary full-width">Retry current stage</button></form>{% if prospect.preview_path %}<form method="post" action="/api/prospects/{{ prospect.id }}/revoke-preview"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary full-width">Revoke preview</button></form>{% endif %}<a class="button-link secondary" href="/api/prospects/{{ prospect.id }}/artifacts">Export artefacts JSON</a><a class="button-link secondary" href="/api/prospects/{{ prospect.id }}/audit">Export audit JSON</a></div></section>
+      <section class="panel control-card danger-zone"><p class="eyebrow">Privacy control</p><p>Redact direct identifiers and revoke previews while retaining accountability metadata.</p><form method="post" action="/api/prospects/{{ prospect.id }}/redact" data-confirm="Redact this prospect?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger full-width">Redact prospect</button></form></section>
     </aside>
   </section>
 </main>

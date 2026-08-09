@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 
 from fivefold.audit import append_audit, verify_audit_chain
@@ -194,6 +194,34 @@ def dashboard(request: Request, db: DbSession) -> HTMLResponse:
         "curated": sum(item.status == "curated" for item in prospects),
         "running": sum(item.status in {"queued", "running"} for item in prospects),
         "review": sum(item.status == "needs_human_review" for item in prospects),
+        "failed": sum(item.status == "failed" for item in prospects),
+        "ready_for_outreach": sum(
+            item.status == "curated" and item.human_status in {"unverified", "verified"}
+            for item in prospects
+        ),
+    }
+    stage_counts = {
+        stage.value: sum(item.current_stage == stage.value for item in prospects)
+        for stage in Stage
+    }
+    recent_handoffs = db.execute(
+        select(Handoff, Prospect.business_name)
+        .join(Prospect, Prospect.id == Handoff.prospect_id)
+        .order_by(desc(Handoff.created_at))
+        .limit(8)
+    ).all()
+    recent_runs = db.scalars(
+        select(ResearchRun).order_by(desc(ResearchRun.created_at)).limit(5)
+    ).all()
+    stage_run_counts = {
+        "completed": db.scalar(
+            select(func.count()).select_from(StageRun).where(StageRun.status == "completed")
+        )
+        or 0,
+        "failed": db.scalar(
+            select(func.count()).select_from(StageRun).where(StageRun.status == "failed")
+        )
+        or 0,
     }
     return templates.TemplateResponse(
         request,
@@ -201,8 +229,15 @@ def dashboard(request: Request, db: DbSession) -> HTMLResponse:
         {
             "prospects": prospects,
             "counts": counts,
+            "stage_counts": stage_counts,
+            "stage_run_counts": stage_run_counts,
+            "recent_handoffs": recent_handoffs,
+            "recent_runs": recent_runs,
+            "stages": list(Stage),
             "csrf": csrf_token(settings()),
             "default_prospects": settings().default_prospects,
+            "authenticated": True,
+            "active_page": "dashboard",
         },
     )
 
@@ -252,6 +287,8 @@ def prospect_page(request: Request, prospect_id: str, db: DbSession) -> HTMLResp
             "stages": list(Stage),
             "csrf": csrf_token(settings()),
             "base_url": settings().base_url.rstrip("/"),
+            "authenticated": True,
+            "active_page": "prospects",
         },
     )
 
@@ -478,7 +515,12 @@ def pricing_page(request: Request, db: DbSession) -> Response:
     return templates.TemplateResponse(
         request,
         "settings.html",
-        {"pricing": current, "csrf": csrf_token(settings())},
+        {
+            "pricing": current,
+            "csrf": csrf_token(settings()),
+            "authenticated": True,
+            "active_page": "settings",
+        },
     )
 
 

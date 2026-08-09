@@ -1,41 +1,85 @@
 {% extends "base.html" %}
+{% block title %}Operations overview · Fivefold Web{% endblock %}
 {% block content %}
-<main class="shell">
-  <section class="hero-panel">
-    <div><p class="kicker">Agentic organisation · Dublin</p><h1>Opportunity,<br>made tangible.</h1><p>Exactly five agents turn local research into an auditable website concept and a human-ready proposal.</p></div>
-    <div class="hero-actions">
-      <form method="post" action="/api/worker/tick"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="limit" value="1"><button>Process next handoff</button></form>
+<main class="admin-main">
+  <header class="page-heading">
+    <div><p class="eyebrow">Operations overview</p><h1>Pipeline control</h1><p>Monitor prospects, agent execution, handoffs, and items requiring a human decision.</p></div>
+    <div class="page-actions">
+      <form method="post" action="/api/worker/tick"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="limit" value="1"><button>Run next queued stage</button></form>
     </div>
+  </header>
+
+  <section class="metric-grid" aria-label="Pipeline metrics">
+    <article><div class="metric-label"><span>Active pipeline</span><i class="metric-dot amber"></i></div><strong>{{ counts.running }}</strong><small>{{ counts.total }} total prospects</small></article>
+    <article><div class="metric-label"><span>Manager curated</span><i class="metric-dot green"></i></div><strong>{{ counts.curated }}</strong><small>{{ counts.ready_for_outreach }} awaiting human outreach</small></article>
+    <article><div class="metric-label"><span>Needs attention</span><i class="metric-dot red"></i></div><strong>{{ counts.review + counts.failed }}</strong><small>{{ counts.review }} review · {{ counts.failed }} failed</small></article>
+    <article><div class="metric-label"><span>Completed agent runs</span><i class="metric-dot blue"></i></div><strong>{{ stage_run_counts.completed }}</strong><small>{{ stage_run_counts.failed }} failed attempts logged</small></article>
   </section>
-  <section class="metrics">
-    <article><span>{{ counts.total }}</span><p>Total prospects</p></article><article><span>{{ counts.running }}</span><p>In motion</p></article><article><span>{{ counts.curated }}</span><p>Manager curated</p></article><article><span>{{ counts.review }}</span><p>Human review</p></article>
-  </section>
-  <section class="agent-rail" aria-label="Five agent pipeline">
-    {% for item in [('01','Researcher','Find the signal'),('02','Designer','Shape the answer'),('03','Maker','Build the proof'),('04','Communicator','Tell the story'),('05','Manager','Create the value')] %}<div><b>{{ item[0] }}</b><strong>{{ item[1] }}</strong><span>{{ item[2] }}</span></div>{% endfor %}
-  </section>
-  <section class="grid-two">
-    <div>
-      <div class="section-head"><div><p class="kicker">Pipeline board</p><h2>Curated prospects</h2></div></div>
-      <div class="prospect-list">
-        {% for prospect in prospects %}
-        <a class="prospect-card" href="/prospects/{{ prospect.id }}">
-          <div><span class="status {{ prospect.status }}">{{ prospect.status|replace('_',' ') }}</span><h3>{{ prospect.business_name }}</h3><p>{{ prospect.category }} · {{ prospect.location }}</p></div>
-          <div class="card-meta"><span>{{ prospect.footprint|replace('_',' ') }}</span><b>{{ prospect.current_stage }}</b></div>
-        </a>
-        {% else %}<div class="empty"><h3>No prospects yet</h3><p>Start a live research run to find qualified local businesses.</p></div>{% endfor %}
+
+  <section class="operations-grid">
+    <div class="panel pipeline-panel">
+      <div class="panel-head"><div><h2>Agent pipeline</h2><p>Current location of every prospect</p></div><span class="panel-meta">Exactly 5 agents</span></div>
+      <div class="pipeline-map">
+        {% for stage in stages %}
+        <div class="pipeline-stage">
+          <div class="stage-top"><span class="agent-number">0{{ loop.index }}</span>{% if not loop.last %}<span class="stage-arrow">→</span>{% endif %}</div>
+          <strong>{{ stage.value|title }}</strong><span>{{ stage_counts[stage.value] }} prospect{% if stage_counts[stage.value] != 1 %}s{% endif %}</span>
+          <div class="stage-bar"><i style="width: {{ (stage_counts[stage.value] / counts.total * 100) if counts.total else 0 }}%"></i></div>
+        </div>
+        {% endfor %}
       </div>
     </div>
-    <aside class="run-card">
-      <p class="kicker">New research run</p><h2>Find Dublin opportunities</h2>
-      <form method="post" action="/api/research-runs" class="stack">
+
+    <aside class="panel research-panel">
+      <div class="panel-head"><div><h2>Start research</h2><p>Create a live Dublin prospect run</p></div></div>
+      <form method="post" action="/api/research-runs" class="form-stack">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <label>Location<input name="location" value="Dublin, Ireland" required></label>
-        <label>Categories<textarea name="categories" rows="3">plumbers</textarea></label>
-        <label>Maximum businesses<input name="max_businesses" type="number" min="1" max="10" value="{{ default_prospects }}"></label>
-        <button>Start research</button>
+        <label>Business categories<textarea name="categories" rows="2">plumbers</textarea></label>
+        <label>Prospect limit<input name="max_businesses" type="number" min="1" max="10" value="{{ default_prospects }}"></label>
+        <button>Start live research</button>
       </form>
-      <p class="micro">Research uses Google Places and agent stages use OpenAI. No agent sends messages or buys domains.</p>
     </aside>
+  </section>
+
+  <section class="dashboard-lower">
+    <div class="panel">
+      <div class="panel-head"><div><h2>Prospect queue</h2><p>Operational status and next agent</p></div><span class="panel-meta">{{ counts.total }} records</span></div>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Prospect</th><th>Footprint</th><th>Current agent</th><th>Pipeline status</th><th>Human status</th><th>Updated</th><th></th></tr></thead>
+          <tbody>
+          {% for prospect in prospects %}
+          <tr>
+            <td><a class="prospect-name" href="/prospects/{{ prospect.id }}">{{ prospect.business_name }}</a><small>{{ prospect.category }} · {{ prospect.location }}</small></td>
+            <td><span class="plain-label">{{ prospect.footprint|replace('_',' ') }}</span></td>
+            <td><span class="agent-cell"><i>{{ {'researcher':'R','designer':'D','maker':'M','communicator':'C','manager':'O'}[prospect.current_stage] }}</i>{{ prospect.current_stage|title }}</span></td>
+            <td><span class="status {{ prospect.status }}">{{ prospect.status|replace('_',' ') }}</span></td>
+            <td>{{ prospect.human_status|replace('_',' ')|title }}</td>
+            <td><time>{{ prospect.updated_at.strftime('%d %b %H:%M') }}</time></td>
+            <td><a class="row-link" href="/prospects/{{ prospect.id }}" aria-label="Open {{ prospect.business_name }}">→</a></td>
+          </tr>
+          {% else %}<tr><td colspan="7" class="empty-table">No prospects yet. Start a research run to populate the queue.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="side-stack">
+      <section class="panel handoff-feed">
+        <div class="panel-head"><div><h2>Recent handoffs</h2><p>Latest agent-to-agent decisions</p></div></div>
+        {% for handoff, business_name in recent_handoffs %}
+        <a class="handoff-feed-row" href="/prospects/{{ handoff.prospect_id }}#handoffs">
+          <div class="handoff-route"><b>{{ handoff.from_stage[:1]|upper }}</b><span>→</span><b class="destination">{{ handoff.to_stage[:1]|upper if handoff.to_stage else '✓' }}</b></div>
+          <div><strong>{{ handoff.from_stage|title }} → {{ handoff.to_stage|title if handoff.to_stage else 'Complete' }}</strong><span>{{ business_name }}</span><small>{{ handoff.decision|replace('_',' ') }} · {{ handoff.created_at.strftime('%d %b %H:%M') }}</small></div>
+        </a>
+        {% else %}<p class="empty-note">Handoffs will appear here after the first agent stage completes.</p>{% endfor %}
+      </section>
+      <section class="panel compact-panel">
+        <div class="panel-head"><div><h2>Research activity</h2></div></div>
+        {% for run in recent_runs %}<div class="run-row"><span class="status {{ run.status }}">{{ run.status }}</span><div><b>{{ run.categories|join(', ') }}</b><small>{{ run.max_businesses }} max · {{ run.created_at.strftime('%d %b %H:%M') }}</small>{% if run.error %}<small class="error-text">{{ run.error }}</small>{% endif %}</div></div>{% else %}<p class="empty-note">No live research runs recorded.</p>{% endfor %}
+      </section>
+    </div>
   </section>
 </main>
 {% endblock %}

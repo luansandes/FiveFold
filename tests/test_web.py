@@ -9,7 +9,16 @@ from sqlalchemy.orm import Session
 
 from fivefold.auth import SESSION_COOKIE, create_session, csrf_token
 from fivefold.config import get_settings
-from fivefold.models import Artifact, PreviewToken, PricingSetting, Prospect, ResearchRun, utcnow
+from fivefold.models import (
+    Artifact,
+    Handoff,
+    PreviewToken,
+    PricingSetting,
+    Prospect,
+    ResearchRun,
+    StageRun,
+    utcnow,
+)
 from fivefold.web import app
 
 
@@ -105,6 +114,65 @@ def test_no_demo_or_external_mutation_route_exists() -> None:
     paths = {route.path.lower() for route in app.routes}
     forbidden = ("demo", "send-email", "send-message", "purchase-domain", "register-domain")
     assert all(all(term not in path for term in forbidden) for path in paths)
+
+
+def test_admin_ui_exposes_operational_handoffs_and_agent_runs(db: Session) -> None:
+    prospect = add_live_prospect(db)
+    run = StageRun(
+        prospect_id=prospect.id,
+        stage="researcher",
+        status="completed",
+        attempt=1,
+        prompt_version="prompt-version-hash",
+        input_artifact_ids=[],
+        usage={"input_tokens": 120, "output_tokens": 80},
+        completed_at=utcnow(),
+    )
+    handoff = Handoff(
+        prospect_id=prospect.id,
+        from_stage="researcher",
+        to_stage="designer",
+        decision="advance",
+        reason="Evidence is sufficient for a tailored design.",
+    )
+    manager_artifact = Artifact(
+        prospect_id=prospect.id,
+        stage="manager",
+        version=1,
+        payload={
+            "artifact": {
+                "disposition": "accept",
+                "priority": "high",
+                "profitability": {
+                    "annual_revenue_eur": 149.99,
+                    "contribution_eur": 71.50,
+                    "gross_margin_percent": 47.7,
+                },
+                "executive_summary": "Strong fit for a focused landing page.",
+                "next_human_action": "Verify the public phone number before outreach.",
+            }
+        },
+        content_hash="c" * 64,
+    )
+    db.add_all([run, handoff, manager_artifact])
+    db.commit()
+
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, create_session(get_settings()))
+        dashboard = client.get("/")
+        assert dashboard.status_code == 200
+        assert "Pipeline control" in dashboard.text
+        assert "Recent handoffs" in dashboard.text
+        assert "Researcher → Designer" in dashboard.text
+
+        detail = client.get(f"/prospects/{prospect.id}")
+        assert detail.status_code == 200
+        assert "Agent handoff log" in detail.text
+        assert "Evidence is sufficient for a tailored design." in detail.text
+        assert "Agent run history" in detail.text
+        assert "200" in detail.text
+        assert "ManagerDecision" in detail.text
+        assert "Strong fit for a focused landing page." in detail.text
 
 
 def test_pricing_updates_are_versioned(db: Session) -> None:

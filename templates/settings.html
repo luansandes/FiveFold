@@ -1,13 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Economics · Fivefold Web{% endblock %}
 {% block content %}
-<main class="shell settings-shell">
-  <a class="back" href="/">← Prospect board</a>
-  <p class="kicker">Versioned operating assumptions</p>
-  <h1>Economics</h1>
-  <p class="muted">Every save creates a timestamped version. Existing Manager artefacts retain the assumptions used when they ran.</p>
+<main class="admin-main settings-shell">
+  <header class="page-heading"><div><p class="eyebrow">Versioned operating assumptions</p><h1>Economics</h1><p>Every save creates a timestamped version. Existing Manager artefacts retain the assumptions used when they ran.</p></div></header>
   {% if pricing %}
-  <form class="action-card stack" method="post" action="/api/settings/pricing">
+  <form class="panel form-stack" method="post" action="/api/settings/pricing">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="price-grid">
       <label>Monthly offer (€ ex VAT)<input type="number" min="0" step="0.01" name="monthly_eur" value="{{ pricing.values.monthly_eur }}" required></label>
@@ -20,7 +17,7 @@
       <label>Early-cancellation risk (€)<input type="number" min="0" step="0.01" name="early_cancellation_risk_eur" value="{{ pricing.values.early_cancellation_risk_eur }}" required></label>
     </div>
     <label>Source and assumption note<textarea name="source_note" rows="3">{{ pricing.values.source_note }}</textarea></label>
-    <button>Save new pricing version</button>
+    <div><button>Save new pricing version</button></div>
     <p class="micro">Current version: {{ pricing.name }} · effective {{ pricing.effective_at.strftime('%d %b %Y %H:%M') }} · VAT assumption 23%.</p>
   </form>
   {% else %}<p class="alert">No pricing version exists. Run the database migration/bootstrap first.</p>{% endif %}
