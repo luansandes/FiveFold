@@ -4,6 +4,7 @@ import test from "node:test";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 import * as queueConsumer from "../api/queue_consumer";
+import { processorBaseUrl } from "../api/queue_consumer";
 import { publishStageJobs } from "../api/queue_publish";
 
 type ResponseCapture = {
@@ -38,6 +39,20 @@ function captureResponse(): ResponseCapture {
 test("queue consumer uses the Web-style named POST contract", () => {
   assert.equal(typeof queueConsumer.POST, "function");
   assert.equal("default" in queueConsumer, false);
+});
+
+test("queue consumer uses the unprotected production domain for Python jobs", () => {
+  assert.equal(
+    processorBaseUrl({
+      VERCEL_PROJECT_PRODUCTION_URL: "five-fold.vercel.app",
+      VERCEL_URL: "protected-preview.vercel.app",
+    } as NodeJS.ProcessEnv),
+    "https://five-fold.vercel.app",
+  );
+  assert.equal(
+    processorBaseUrl({ VERCEL_URL: "local-deployment.vercel.app" } as NodeJS.ProcessEnv),
+    "https://local-deployment.vercel.app",
+  );
 });
 
 test("publishes every job with its database ID as the idempotency key", async () => {
