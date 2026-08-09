@@ -1,6 +1,10 @@
 {
   "name": "fivefold-queue-bridge",
   "private": true,
+  "scripts": {
+    "test:queue": "tsx --test tests/queue_publish.test.ts",
+    "typecheck:queue": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext api/queue_publish.ts api/queue_consumer.ts tests/queue_publish.test.ts"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -9,6 +13,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
+    "@vercel/node": "^5.9.7",
+    "tsx": "^4.23.11",
     "typescript": "^5.9.3"
   }
 }
