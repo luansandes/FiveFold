@@ -2,10 +2,10 @@
 {% block title %}{{ prospect.business_name }} · Fivefold Web{% endblock %}
 {% block content %}
 <main class="admin-main prospect-main">
-  <div class="breadcrumb"><a href="/">Overview</a><span>/</span><span>Prospects</span><span>/</span><b>{{ prospect.business_name }}</b></div>
+  <div class="breadcrumb"><a href="/">Overview</a><span>/</span><a href="/prospects">Prospects</a><span>/</span><b>{{ prospect.business_name }}</b></div>
   <header class="prospect-heading">
     <div><div class="heading-labels"><span class="status {{ prospect.status }}">{{ prospect.status|replace('_',' ') }}</span><span class="plain-label">{{ prospect.footprint|replace('_',' ') }}</span></div><h1>{{ prospect.business_name }}</h1><p>{{ prospect.category }} · {{ prospect.location }}</p><p class="qualification">{{ prospect.qualification_reason }}</p></div>
-    <div class="prospect-kpis"><div><span>Priority</span><strong>{{ prospect.priority|title }}</strong></div><div><span>Human status</span><strong>{{ prospect.human_status|replace('_',' ')|title }}</strong></div><div><span>Revisions</span><strong>{{ prospect.revision_count }}/2</strong></div></div>
+    <div class="prospect-kpis"><div><span>Opportunity</span><strong>{{ latest.researcher.payload.artifact.opportunity_score if latest.researcher else 'Pending' }}</strong></div><div><span>Threshold</span><strong>&gt; {{ research_run.opportunity_threshold }}</strong></div><div><span>Priority</span><strong>{{ prospect.priority|title }}</strong></div><div><span>Human status</span><strong>{{ prospect.human_status|replace('_',' ')|title }}</strong></div><div><span>Revisions</span><strong>{{ prospect.revision_count }}/2</strong></div></div>
   </header>
 
   <section class="panel pipeline-detail" aria-label="Agent pipeline">

@@ -14,6 +14,14 @@ class AgentRuntimeError(RuntimeError):
     pass
 
 
+def validate_agent_output_schemas() -> None:
+    """Fail before a live call if any of the five output contracts is not strict."""
+    from agents.agent_output import AgentOutputSchema
+
+    for definition in AGENTS_BY_STAGE.values():
+        AgentOutputSchema(definition.output_model, strict_json_schema=True).json_schema()
+
+
 class AgentRuntime:
     """Runs the five configured model agents against the live OpenAI connection."""
 

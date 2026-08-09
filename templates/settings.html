@@ -1,8 +1,18 @@
 {% extends "base.html" %}
-{% block title %}Economics · Fivefold Web{% endblock %}
+{% block title %}Settings · Fivefold Web{% endblock %}
 {% block content %}
 <main class="admin-main settings-shell">
-  <header class="page-heading"><div><p class="eyebrow">Versioned operating assumptions</p><h1>Economics</h1><p>Every save creates a timestamped version. Existing Manager artefacts retain the assumptions used when they ran.</p></div></header>
+  <header class="page-heading"><div><p class="eyebrow">Versioned operating controls</p><h1>Settings</h1><p>Pipeline rules and commercial assumptions are persisted and snapshotted for auditability.</p></div></header>
+  <section class="settings-section">
+    <div class="settings-section-head"><div><h2>Pipeline rules</h2><p>Applied to new research runs. Existing runs retain their original threshold.</p></div><span class="panel-meta">Effective {{ operational.effective_at.strftime('%d %b %Y %H:%M') }}</span></div>
+    <form class="panel form-stack" method="post" action="/api/settings/pipeline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="price-grid"><label>Maximum new prospects per run<input type="number" min="1" max="10" step="1" name="max_prospects_per_run" value="{{ operational.max_prospects_per_run }}" required></label><label>Opportunity score threshold<input type="number" min="0" max="100" step="1" name="opportunity_score_threshold" value="{{ operational.opportunity_score_threshold }}" required></label></div>
+      <p class="micro">A prospect advances from Researcher to Designer only when its score is strictly greater than the threshold.</p><div><button>Save pipeline version</button></div>
+    </form>
+  </section>
+  <section class="settings-section">
+  <div class="settings-section-head"><div><h2>Economics</h2><p>Every save creates a timestamped version used by future Manager runs.</p></div></div>
   {% if pricing %}
   <form class="panel form-stack" method="post" action="/api/settings/pricing">
     <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -21,5 +31,6 @@
     <p class="micro">Current version: {{ pricing.name }} · effective {{ pricing.effective_at.strftime('%d %b %Y %H:%M') }} · VAT assumption 23%.</p>
   </form>
   {% else %}<p class="alert">No pricing version exists. Run the database migration/bootstrap first.</p>{% endif %}
+  </section>
 </main>
 {% endblock %}

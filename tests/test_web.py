@@ -53,9 +53,26 @@ def test_api_requires_admin_and_preview_is_safe(db: Session) -> None:
         "html": '<html><head><meta name="viewport"></head><body><main><h1>Live Business</h1></main></body></html>',
         "css": "@media(max-width:800px){main{display:block}}",
         "meta_description": "Independent concept",
-        "structured_data": {},
+        "structured_data": {
+            "name": "Live Business",
+            "description": "Independent concept",
+            "area_served": "Dublin, Ireland",
+        },
         "content_manifest": [],
-        "validation": {"passed": True, "checks": {}, "warnings": []},
+        "validation": {
+            "passed": True,
+            "checks": {
+                "no_scripts": True,
+                "no_iframes": True,
+                "no_active_forms": True,
+                "has_main": True,
+                "has_heading": True,
+                "has_viewport": True,
+                "responsive_css": True,
+                "no_javascript_urls": True,
+            },
+            "warnings": [],
+        },
         "artefact_hash": "a" * 64,
         "inherited_design_version": 1,
         "preview_path": None,
@@ -164,6 +181,9 @@ def test_admin_ui_exposes_operational_handoffs_and_agent_runs(db: Session) -> No
         assert "Pipeline control" in dashboard.text
         assert "Recent handoffs" in dashboard.text
         assert "Researcher → Designer" in dashboard.text
+        prospects_page = client.get("/prospects")
+        assert prospects_page.status_code == 200
+        assert "Pipeline records" in prospects_page.text
 
         detail = client.get(f"/prospects/{prospect.id}")
         assert detail.status_code == 200
@@ -198,3 +218,24 @@ def test_pricing_updates_are_versioned(db: Session) -> None:
     db.expire_all()
     versions = db.scalars(select(PricingSetting)).all()
     assert any(item.values["source_note"] == "Test version" for item in versions)
+
+
+def test_pipeline_settings_are_database_backed(db: Session) -> None:
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, create_session(get_settings()))
+        initial = client.get("/api/settings/pipeline")
+        assert initial.json()["max_prospects_per_run"] == 1
+        assert initial.json()["opportunity_score_threshold"] == 90
+        response = client.post(
+            "/api/settings/pipeline",
+            data={
+                "max_prospects_per_run": "2",
+                "opportunity_score_threshold": "91",
+                "csrf": csrf_token(get_settings()),
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        updated = client.get("/api/settings/pipeline").json()
+        assert updated["max_prospects_per_run"] == 2
+        assert updated["opportunity_score_threshold"] == 91

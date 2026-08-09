@@ -10,9 +10,10 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
+from fivefold.agent_runtime import validate_agent_output_schemas
 from fivefold.audit import append_audit, verify_audit_chain
 from fivefold.auth import (
     SESSION_COOKIE,
@@ -26,24 +27,30 @@ from fivefold.auth import (
 )
 from fivefold.config import Settings, get_settings
 from fivefold.contracts import HumanStatusRequest, ResearchRunRequest, Stage, WebsiteArtifact
-from fivefold.db import get_db, init_db
+from fivefold.db import get_db, get_engine, get_session_factory, init_db
 from fivefold.models import (
     Artifact,
     AuditEvent,
     Handoff,
+    Job,
+    OperationalSetting,
     PreviewToken,
     PricingSetting,
     Prospect,
     ResearchRun,
     StageRun,
+    SystemMarker,
     utcnow,
 )
+from fivefold.operational import current_operational_setting
+from fivefold.reset import reset_generated_data
 from fivefold.site_builder import render_public_preview
 from fivefold.workflow import (
     create_research_run,
     enqueue_job,
     latest_artifact,
-    worker_tick,
+    process_job_by_id,
+    recover_queued_jobs,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -83,6 +90,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         if any(defaults):
             raise RuntimeError("Production secrets and ADMIN_PASSWORD_HASH must be configured")
     init_db()
+    validate_agent_output_schemas()
     yield
 
 
@@ -223,6 +231,11 @@ def dashboard(request: Request, db: DbSession) -> HTMLResponse:
         )
         or 0,
     }
+    operational = current_operational_setting(db)
+    queue_counts = {
+        state: db.scalar(select(func.count()).select_from(Job).where(Job.status == state)) or 0
+        for state in ("queued", "running", "failed")
+    }
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -235,9 +248,46 @@ def dashboard(request: Request, db: DbSession) -> HTMLResponse:
             "recent_runs": recent_runs,
             "stages": list(Stage),
             "csrf": csrf_token(settings()),
-            "default_prospects": settings().default_prospects,
+            "operational": operational,
+            "queue_counts": queue_counts,
             "authenticated": True,
             "active_page": "dashboard",
+        },
+    )
+
+
+@app.get("/prospects", response_class=HTMLResponse)
+def prospects_page(request: Request, db: DbSession) -> HTMLResponse:
+    if not read_session(settings(), request.cookies.get(SESSION_COOKIE)):
+        return RedirectResponse("/login", status_code=303)  # type: ignore[return-value]
+    search = request.query_params.get("q", "").strip()
+    status = request.query_params.get("status", "").strip()
+    stage = request.query_params.get("stage", "").strip()
+    query = select(Prospect)
+    if search:
+        pattern = f"%{search}%"
+        query = query.where(
+            or_(
+                Prospect.business_name.ilike(pattern),
+                Prospect.category.ilike(pattern),
+                Prospect.location.ilike(pattern),
+            )
+        )
+    if status:
+        query = query.where(Prospect.status == status)
+    if stage:
+        query = query.where(Prospect.current_stage == stage)
+    prospects = db.scalars(query.order_by(desc(Prospect.updated_at))).all()
+    return templates.TemplateResponse(
+        request,
+        "prospects.html",
+        {
+            "prospects": prospects,
+            "stages": list(Stage),
+            "filters": {"q": search, "status": status, "stage": stage},
+            "csrf": csrf_token(settings()),
+            "authenticated": True,
+            "active_page": "prospects",
         },
     )
 
@@ -273,6 +323,7 @@ def prospect_page(request: Request, prospect_id: str, db: DbSession) -> HTMLResp
         stage.value: latest_artifact(db, prospect_id, stage)
         for stage in Stage
     }
+    research_run = db.get(ResearchRun, prospect.research_run_id)
     return templates.TemplateResponse(
         request,
         "prospect.html",
@@ -284,6 +335,7 @@ def prospect_page(request: Request, prospect_id: str, db: DbSession) -> HTMLResp
             "events": events,
             "audit_valid": verify_audit_chain(list(events)),
             "latest": latest,
+            "research_run": research_run,
             "stages": list(Stage),
             "csrf": csrf_token(settings()),
             "base_url": settings().base_url.rstrip("/"),
@@ -299,7 +351,6 @@ async def start_research(
     db: DbSession,
     location: Annotated[str, Form()] = "Dublin, Ireland",
     categories: Annotated[str, Form()] = "plumbers",
-    max_businesses: Annotated[int, Form()] = 1,
     csrf: Annotated[str, Form()] = "",
 ) -> RedirectResponse:
     config = assert_admin(request)
@@ -307,7 +358,6 @@ async def start_research(
     payload = ResearchRunRequest(
         location=location,
         categories=[item.strip() for item in categories.split(",") if item.strip()],
-        max_businesses=max_businesses,
     )
     await create_research_run(db, config, payload)
     return RedirectResponse("/", status_code=303)
@@ -351,26 +401,52 @@ def get_prospect(request: Request, prospect_id: str, db: DbSession) -> dict[str,
     return result
 
 
-@app.post("/api/worker/tick")
-async def process_tick(
-    request: Request,
-    db: DbSession,
-    csrf: Annotated[str, Form()] = "",
-    limit: Annotated[int, Form()] = 5,
-) -> RedirectResponse:
-    config = assert_admin(request)
-    assert_csrf(request, csrf)
-    await worker_tick(db, config, limit)
-    return RedirectResponse(request.headers.get("referer", "/"), status_code=303)
-
-
 @app.get("/api/worker/tick")
 async def cron_tick(request: Request, db: DbSession) -> JSONResponse:
     config = settings()
     if request.headers.get("authorization") != f"Bearer {config.cron_secret}":
         raise HTTPException(status_code=401, detail="Invalid cron secret")
-    results = await worker_tick(db, config, 1)
-    return JSONResponse({"processed": len(results), "results": results})
+    job_ids = await recover_queued_jobs(db, config, 10)
+    return JSONResponse({"republished": len(job_ids), "job_ids": job_ids})
+
+
+@app.post("/api/internal/jobs/{job_id}/process")
+async def process_queued_job(request: Request, job_id: str, db: DbSession) -> JSONResponse:
+    config = settings()
+    if request.headers.get("authorization") != f"Bearer {config.cron_secret}":
+        raise HTTPException(status_code=401, detail="Invalid worker secret")
+    try:
+        result = await process_job_by_id(db, config, job_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(result)
+
+
+@app.get("/api/internal/reset-generated")
+def reset_generated_records(request: Request) -> JSONResponse:
+    config = settings()
+    if request.headers.get("authorization") != f"Bearer {config.cron_secret}":
+        raise HTTPException(status_code=401, detail="Invalid maintenance secret")
+    marker_key = "fresh-start-2026-08-09"
+    engine = get_engine()
+    marker_session = get_session_factory()()
+    try:
+        marker = marker_session.get(SystemMarker, marker_key)
+        if marker:
+            print(f"maintenance reset already completed: {marker_key}")
+            return JSONResponse({"status": "already_completed", "marker": marker_key})
+    finally:
+        marker_session.close()
+    result = reset_generated_data(engine)
+    init_db()
+    marker_session = get_session_factory()()
+    try:
+        marker_session.add(SystemMarker(key=marker_key, payload=result))
+        marker_session.commit()
+    finally:
+        marker_session.close()
+    print(f"maintenance reset completed: {result}")
+    return JSONResponse({"status": "completed", "marker": marker_key, **result})
 
 
 @app.post("/api/prospects/{prospect_id}/retry")
@@ -512,16 +588,65 @@ def pricing_page(request: Request, db: DbSession) -> Response:
     if not read_session(settings(), request.cookies.get(SESSION_COOKIE)):
         return RedirectResponse("/login", status_code=303)
     current = db.scalar(select(PricingSetting).order_by(desc(PricingSetting.effective_at)))
+    operational = current_operational_setting(db)
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
             "pricing": current,
+            "operational": operational,
             "csrf": csrf_token(settings()),
             "authenticated": True,
             "active_page": "settings",
         },
     )
+
+
+@app.get("/api/settings/pipeline")
+def get_pipeline_settings(request: Request, db: DbSession) -> dict[str, Any]:
+    assert_admin(request)
+    current = current_operational_setting(db)
+    return {
+        "id": current.id,
+        "max_prospects_per_run": current.max_prospects_per_run,
+        "opportunity_score_threshold": current.opportunity_score_threshold,
+        "effective_at": current.effective_at,
+    }
+
+
+@app.post("/api/settings/pipeline")
+def update_pipeline_settings(
+    request: Request,
+    db: DbSession,
+    max_prospects_per_run: Annotated[int, Form()],
+    opportunity_score_threshold: Annotated[int, Form()],
+    csrf: Annotated[str, Form()] = "",
+) -> RedirectResponse:
+    assert_admin(request)
+    assert_csrf(request, csrf)
+    if not 1 <= max_prospects_per_run <= 10:
+        raise HTTPException(status_code=422, detail="Prospect limit must be between 1 and 10")
+    if not 0 <= opportunity_score_threshold <= 100:
+        raise HTTPException(status_code=422, detail="Opportunity threshold must be 0 to 100")
+    record = OperationalSetting(
+        name=f"operations-{utcnow().isoformat()}",
+        max_prospects_per_run=max_prospects_per_run,
+        opportunity_score_threshold=opportunity_score_threshold,
+    )
+    db.add(record)
+    db.flush()
+    append_audit(
+        db,
+        "operations.version_created",
+        "admin",
+        {
+            "operational_setting_id": record.id,
+            "max_prospects_per_run": max_prospects_per_run,
+            "opportunity_score_threshold": opportunity_score_threshold,
+        },
+    )
+    db.commit()
+    return RedirectResponse("/settings", status_code=303)
 
 
 @app.get("/api/settings/pricing")

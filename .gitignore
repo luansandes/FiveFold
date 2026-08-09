@@ -11,3 +11,4 @@ __pycache__/
 .vercel/
 fivefold.db
 htmlcov/
+node_modules/

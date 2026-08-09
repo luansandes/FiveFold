@@ -1,3 +1,4 @@
+from fivefold.agent_runtime import validate_agent_output_schemas
 from fivefold.contracts import STAGE_ORDER, Stage
 from fivefold.prompts import AGENT_DEFINITIONS, system_prompt
 
@@ -17,3 +18,6 @@ def test_every_prompt_contains_common_safety_boundary() -> None:
         assert "purchase or associate a domain" in prompt
         assert "A human performs all real communication" in prompt
 
+
+def test_all_five_agent_outputs_are_strict_json_schemas() -> None:
+    validate_agent_output_schemas()

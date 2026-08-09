@@ -4,9 +4,7 @@
 <main class="admin-main">
   <header class="page-heading">
     <div><p class="eyebrow">Operations overview</p><h1>Pipeline control</h1><p>Monitor prospects, agent execution, handoffs, and items requiring a human decision.</p></div>
-    <div class="page-actions">
-      <form method="post" action="/api/worker/tick"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="limit" value="1"><button>Run next queued stage</button></form>
-    </div>
+    <div class="page-actions"><span class="queue-live"><i></i>Automatic handoffs active</span></div>
   </header>
 
   <section class="metric-grid" aria-label="Pipeline metrics">
@@ -36,20 +34,21 @@
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <label>Location<input name="location" value="Dublin, Ireland" required></label>
         <label>Business categories<textarea name="categories" rows="2">plumbers</textarea></label>
-        <label>Prospect limit<input name="max_businesses" type="number" min="1" max="10" value="{{ default_prospects }}"></label>
+        <div class="rule-summary"><span>Run limit <b>{{ operational.max_prospects_per_run }}</b></span><span>Advance when score <b>&gt; {{ operational.opportunity_score_threshold }}</b></span></div>
         <button>Start live research</button>
+        <a class="micro settings-link" href="/settings">Change pipeline rules in Settings</a>
       </form>
     </aside>
   </section>
 
   <section class="dashboard-lower">
     <div class="panel">
-      <div class="panel-head"><div><h2>Prospect queue</h2><p>Operational status and next agent</p></div><span class="panel-meta">{{ counts.total }} records</span></div>
+      <div class="panel-head"><div><h2>Recent prospects</h2><p>Operational status and next agent</p></div><a class="panel-meta panel-link" href="/prospects">View all {{ counts.total }}</a></div>
       <div class="table-wrap">
         <table class="admin-table">
           <thead><tr><th>Prospect</th><th>Footprint</th><th>Current agent</th><th>Pipeline status</th><th>Human status</th><th>Updated</th><th></th></tr></thead>
           <tbody>
-          {% for prospect in prospects %}
+          {% for prospect in prospects[:5] %}
           <tr>
             <td><a class="prospect-name" href="/prospects/{{ prospect.id }}">{{ prospect.business_name }}</a><small>{{ prospect.category }} · {{ prospect.location }}</small></td>
             <td><span class="plain-label">{{ prospect.footprint|replace('_',' ') }}</span></td>
@@ -76,8 +75,8 @@
         {% else %}<p class="empty-note">Handoffs will appear here after the first agent stage completes.</p>{% endfor %}
       </section>
       <section class="panel compact-panel">
-        <div class="panel-head"><div><h2>Research activity</h2></div></div>
-        {% for run in recent_runs %}<div class="run-row"><span class="status {{ run.status }}">{{ run.status }}</span><div><b>{{ run.categories|join(', ') }}</b><small>{{ run.max_businesses }} max · {{ run.created_at.strftime('%d %b %H:%M') }}</small>{% if run.error %}<small class="error-text">{{ run.error }}</small>{% endif %}</div></div>{% else %}<p class="empty-note">No live research runs recorded.</p>{% endfor %}
+        <div class="panel-head"><div><h2>Research activity</h2><p>Queue: {{ queue_counts.queued }} ready · {{ queue_counts.running }} running · {{ queue_counts.failed }} failed</p></div></div>
+        {% for run in recent_runs %}<div class="run-row"><span class="status {{ run.status }}">{{ run.status }}</span><div><b>{{ run.categories|join(', ') }}</b><small>{{ run.created_count }} created · {{ run.duplicates_skipped }} duplicate{% if run.duplicates_skipped != 1 %}s{% endif %} skipped</small>{% if run.error %}<small class="error-text">{{ run.error }}</small>{% endif %}</div></div>{% else %}<p class="empty-note">No live research runs recorded.</p>{% endfor %}
       </section>
     </div>
   </section>

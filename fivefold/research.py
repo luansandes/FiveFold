@@ -31,12 +31,15 @@ async def live_candidates(
     location: str,
     categories: list[str],
     max_businesses: int,
-) -> list[dict[str, Any]]:
+    excluded_place_ids: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     if not settings.google_maps_api_key:
         raise ResearchProviderError("GOOGLE_MAPS_API_KEY is required for live research")
 
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    excluded = excluded_place_ids or set()
+    duplicates_skipped = 0
     field_mask = ",".join(
         [
             "places.id",
@@ -68,6 +71,9 @@ async def live_candidates(
                 if not place_id or place_id in seen:
                     continue
                 seen.add(place_id)
+                if place_id in excluded:
+                    duplicates_skipped += 1
+                    continue
                 website_url = place.get("websiteUri")
                 footprint = classify_footprint(website_url)
                 audit = await audit_website(website_url)
@@ -93,8 +99,8 @@ async def live_candidates(
                     }
                 )
                 if len(candidates) >= max_businesses:
-                    return candidates
-    return candidates
+                    return candidates, duplicates_skipped
+    return candidates, duplicates_skipped
 
 
 def classify_footprint(website_url: str | None) -> str:

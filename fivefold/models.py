@@ -25,6 +25,12 @@ class ResearchRun(Base):
     location: Mapped[str] = mapped_column(String(200))
     categories: Mapped[list[str]] = mapped_column(JSON)
     max_businesses: Mapped[int] = mapped_column(Integer)
+    operational_setting_id: Mapped[str | None] = mapped_column(
+        ForeignKey("operational_settings.id"), nullable=True, index=True
+    )
+    opportunity_threshold: Mapped[int] = mapped_column(Integer, default=90)
+    created_count: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates_skipped: Mapped[int] = mapped_column(Integer, default=0)
     provider: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -40,7 +46,9 @@ class Prospect(Base):
     business_name: Mapped[str] = mapped_column(String(240))
     category: Mapped[str] = mapped_column(String(120))
     location: Mapped[str] = mapped_column(String(200), default="Dublin, Ireland")
-    place_id: Mapped[str | None] = mapped_column(String(250), nullable=True, index=True)
+    place_id: Mapped[str | None] = mapped_column(
+        String(250), nullable=True, unique=True, index=True
+    )
     website_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     footprint: Mapped[str] = mapped_column(String(30))
     qualification_reason: Mapped[str] = mapped_column(Text)
@@ -172,6 +180,25 @@ class PricingSetting(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class OperationalSetting(Base):
+    __tablename__ = "operational_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    max_prospects_per_run: Mapped[int] = mapped_column(Integer, default=1)
+    opportunity_score_threshold: Mapped[int] = mapped_column(Integer, default=90)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SystemMarker(Base):
+    __tablename__ = "system_markers"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (Index("ix_audit_prospect_created", "prospect_id", "created_at"),)
@@ -186,4 +213,3 @@ class AuditEvent(Base):
     previous_hash: Mapped[str] = mapped_column(String(64), default="0" * 64)
     content_hash: Mapped[str] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-

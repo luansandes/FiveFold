@@ -36,6 +36,7 @@ Fill `.env.local` before starting. Never commit it.
 | `CRON_SECRET` | Authenticates the worker cron |
 | `PREVIEW_SIGNING_SECRET` | Reserved for preview-key rotation |
 | `BASE_URL` | Canonical URL used in communication drafts |
+| `QUEUE_TOPIC` | Vercel Queue topic used for automatic stage-ready events |
 
 ## Runtime architecture
 
@@ -43,8 +44,11 @@ Fill `.env.local` before starting. Never commit it.
 - Google Places Text Search discovers businesses through a minimal field mask. Raw Places
   responses and reviews are not persisted.
 - The OpenAI Agents SDK runs the five agents with distinct prompts and typed outputs.
-- A SQLAlchemy-backed queue provides idempotent jobs, bounded retries, row-locked claims,
-  and resumability.
+- Postgres persists idempotent jobs, bounded retries, row-locked claims, and resumability.
+- Vercel Queues delivers stage-ready events. Each completed handoff publishes the next
+  persisted job automatically; a five-minute cron only recovers orphaned events.
+- Pipeline limits and opportunity thresholds are versioned in the Settings page. New
+  research runs default to one prospect and only scores strictly above 90 advance.
 - Generated previews use 30-day revocable bearer links, `noindex`, restrictive CSP,
   disabled enquiry actions, and an independent-concept disclosure.
 
@@ -71,14 +75,22 @@ vercel dev
 ```
 
 Configure every required environment value for development, preview, and production.
-`vercel.json` routes all public paths through FastAPI and defines a daily authenticated
-worker cron. The Hobby-compatible pilot processes one agent handoff per invocation within
-the 60-second Python function limit; the dashboard can advance queued work immediately.
+`vercel.json` routes public application paths through FastAPI, registers a private Vercel
+Queue consumer for event-driven handoffs, and defines a five-minute recovery cron. Queue
+delivery uses Vercel OIDC automatically and does not add a sixth model agent.
 
 ## Verification
 
 ```powershell
 ruff check .
 mypy fivefold scripts
+npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext api/queue_publish.ts api/queue_consumer.ts
 pytest --cov=fivefold --cov-report=term-missing
+```
+
+To irreversibly clear generated research, prospect, artefact, preview, job, prompt-version,
+and audit data while preserving pricing:
+
+```powershell
+python scripts/reset_generated_data.py --yes
 ```

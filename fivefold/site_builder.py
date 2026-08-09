@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import re
 
-from fivefold.contracts import ValidationReport, WebsiteArtifact
+from fivefold.contracts import ValidationChecks, ValidationReport, WebsiteArtifact
 
 FORBIDDEN_PATTERNS = [
     r"<script\b",
@@ -16,18 +16,19 @@ FORBIDDEN_PATTERNS = [
 
 def validate_site(html_text: str, css_text: str) -> ValidationReport:
     lowered = html_text.lower()
-    checks = {
-        "no_scripts": "<script" not in lowered,
-        "no_iframes": "<iframe" not in lowered,
-        "no_active_forms": "<form" not in lowered,
-        "has_main": "<main" in lowered,
-        "has_heading": "<h1" in lowered,
-        "has_viewport": "viewport" in lowered,
-        "responsive_css": "@media" in css_text,
-        "no_javascript_urls": "javascript:" not in lowered,
-    }
-    warnings = [name.replace("_", " ") for name, passed in checks.items() if not passed]
-    return ValidationReport(passed=all(checks.values()), checks=checks, warnings=warnings)
+    checks = ValidationChecks(
+        no_scripts="<script" not in lowered,
+        no_iframes="<iframe" not in lowered,
+        no_active_forms="<form" not in lowered,
+        has_main="<main" in lowered,
+        has_heading="<h1" in lowered,
+        has_viewport="viewport" in lowered,
+        responsive_css="@media" in css_text,
+        no_javascript_urls="javascript:" not in lowered,
+    )
+    values = checks.model_dump()
+    warnings = [name.replace("_", " ") for name, passed in values.items() if not passed]
+    return ValidationReport(passed=all(values.values()), checks=checks, warnings=warnings)
 
 
 def sanitize_site(html_text: str, css_text: str) -> tuple[str, str]:

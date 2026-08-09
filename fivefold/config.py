@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,8 +18,6 @@ class Settings(BaseSettings):
     session_secret: str = "development-session-secret-change-me"
     cron_secret: str = "development-cron-secret-change-me"
     preview_signing_secret: str = "development-preview-secret-change-me"
-    max_prospects: int = Field(default=10, ge=1, le=10)
-    default_prospects: int = Field(default=1, ge=1, le=10)
 
     @property
     def is_production(self) -> bool:

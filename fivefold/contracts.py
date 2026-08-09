@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class Stage(StrEnum):
@@ -32,13 +36,13 @@ class DecisionKind(StrEnum):
     REJECT = "reject"
 
 
-class HandoffDecision(BaseModel):
+class HandoffDecision(StrictModel):
     action: DecisionKind = DecisionKind.ADVANCE
     destination: Stage | None = None
     reason: str = "Artefact satisfies the stage contract."
 
 
-class SourceReference(BaseModel):
+class SourceReference(StrictModel):
     label: str
     url: str
     source_type: str = "public"
@@ -46,14 +50,14 @@ class SourceReference(BaseModel):
     attribution: str | None = None
 
 
-class UsageRecord(BaseModel):
+class UsageRecord(StrictModel):
     model: str = "unknown"
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost_eur: float = 0.0
 
 
-class WebsiteAudit(BaseModel):
+class WebsiteAudit(StrictModel):
     reachable: bool = False
     https: bool = False
     mobile_meta: bool = False
@@ -64,7 +68,7 @@ class WebsiteAudit(BaseModel):
     score: int = Field(default=0, ge=0, le=100)
 
 
-class DomainCandidate(BaseModel):
+class DomainCandidate(StrictModel):
     domain: str
     available: bool | None = None
     estimated_annual_cost_eur: float = 23.99
@@ -73,7 +77,7 @@ class DomainCandidate(BaseModel):
     note: str = "Estimate only. No reservation or purchase was performed."
 
 
-class ResearchBrief(BaseModel):
+class ResearchBrief(StrictModel):
     prospect_name: str
     category: str
     location: str = "Dublin, Ireland"
@@ -90,21 +94,36 @@ class ResearchBrief(BaseModel):
     opportunity_score: int = Field(ge=0, le=100)
 
 
-class PageSection(BaseModel):
+class PageSection(StrictModel):
     section_type: str
     heading: str
     purpose: str
     content_points: list[str]
 
 
-class DesignSpecification(BaseModel):
+class VisualPalette(StrictModel):
+    primary: str
+    secondary: str
+    accent: str
+    background: str
+    text: str
+
+
+class TypographyTokens(StrictModel):
+    heading_family: str
+    body_family: str
+    base_size_px: int = Field(ge=14, le=22)
+    line_height: float = Field(ge=1.2, le=2.0)
+
+
+class DesignSpecification(StrictModel):
     concept_name: str
     audience: str
     primary_goal: str
     user_journey: list[str]
     sections: list[PageSection]
-    palette: dict[str, str]
-    typography: dict[str, str]
+    palette: VisualPalette
+    typography: TypographyTokens
     primary_cta: str
     trust_strategy: list[str]
     accessibility_requirements: list[str]
@@ -113,18 +132,40 @@ class DesignSpecification(BaseModel):
     inherited_research_version: int = 1
 
 
-class ValidationReport(BaseModel):
+class ValidationChecks(StrictModel):
+    no_scripts: bool
+    no_iframes: bool
+    no_active_forms: bool
+    has_main: bool
+    has_heading: bool
+    has_viewport: bool
+    responsive_css: bool
+    no_javascript_urls: bool
+
+
+class ValidationReport(StrictModel):
     passed: bool
-    checks: dict[str, bool]
+    checks: ValidationChecks
     warnings: list[str] = Field(default_factory=list)
 
 
-class WebsiteArtifact(BaseModel):
+class LocalBusinessStructuredData(StrictModel):
+    schema_context: Literal["https://schema.org"] = "https://schema.org"
+    schema_type: Literal["LocalBusiness"] = "LocalBusiness"
+    name: str
+    description: str
+    area_served: str
+    address: str | None = None
+    telephone: str | None = None
+    url: str | None = None
+
+
+class WebsiteArtifact(StrictModel):
     title: str
     html: str
     css: str
     meta_description: str
-    structured_data: dict[str, Any]
+    structured_data: LocalBusinessStructuredData
     content_manifest: list[str]
     validation: ValidationReport
     artefact_hash: str
@@ -132,7 +173,7 @@ class WebsiteArtifact(BaseModel):
     preview_path: str | None = None
 
 
-class ServiceOffer(BaseModel):
+class ServiceOffer(StrictModel):
     monthly_eur: float = 14.99
     annual_eur: float = 149.99
     three_year_eur: float = 439.99
@@ -142,20 +183,25 @@ class ServiceOffer(BaseModel):
     excludes: list[str] = Field(default_factory=list)
 
 
-class CommunicationPlan(BaseModel):
+class ObjectionResponse(StrictModel):
+    objection: str
+    response: str
+
+
+class CommunicationPlan(StrictModel):
     value_proposition: str
     email_subject: str
     email_draft: str
     call_outline: list[str]
     follow_up_cadence: list[str]
-    objections: dict[str, str]
+    objections: list[ObjectionResponse]
     preview_url: str
     offer: ServiceOffer
     human_action_notice: str = "A human must verify contact details and send every message."
     inherited_website_version: int = 1
 
 
-class ProfitabilityEstimate(BaseModel):
+class ProfitabilityEstimate(StrictModel):
     annual_revenue_eur: float
     estimated_annual_cost_eur: float
     contribution_eur: float
@@ -164,10 +210,19 @@ class ProfitabilityEstimate(BaseModel):
     assumptions: list[str]
 
 
-class ManagerDecision(BaseModel):
+class QualityScores(StrictModel):
+    evidence_fidelity: int = Field(ge=0, le=100)
+    upstream_inheritance: int = Field(ge=0, le=100)
+    design_specificity: int = Field(ge=0, le=100)
+    preview_quality: int = Field(ge=0, le=100)
+    offer_consistency: int = Field(ge=0, le=100)
+    risk_compliance: int = Field(ge=0, le=100)
+
+
+class ManagerDecision(StrictModel):
     disposition: Literal["accept", "reject", "human_review", "revise"]
     priority: Literal["high", "medium", "low"]
-    quality_scores: dict[str, int]
+    quality_scores: QualityScores
     profitability: ProfitabilityEstimate
     executive_summary: str
     next_human_action: str
@@ -175,7 +230,7 @@ class ManagerDecision(BaseModel):
     inherited_communication_version: int = 1
 
 
-class BaseEnvelope(BaseModel):
+class BaseEnvelope(StrictModel):
     confidence: float = Field(ge=0, le=1)
     facts: list[str] = Field(default_factory=list)
     inferences: list[str] = Field(default_factory=list)
@@ -209,15 +264,12 @@ class ManagerEnvelope(BaseEnvelope):
 Envelope = ResearchEnvelope | DesignEnvelope | MakerEnvelope | CommunicationEnvelope | ManagerEnvelope
 
 
-class ResearchRunRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ResearchRunRequest(StrictModel):
     location: str = "Dublin, Ireland"
     categories: list[str] = Field(default_factory=lambda: ["plumbers"])
-    max_businesses: int = Field(default=1, ge=1, le=10)
 
 
-class HumanStatusRequest(BaseModel):
+class HumanStatusRequest(StrictModel):
     status: Literal["unverified", "verified", "contacted", "replied", "won", "lost"]
     note: str = ""
 

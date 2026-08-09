@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import desc, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from fivefold.agent_runtime import AgentRuntime
@@ -26,7 +27,9 @@ from fivefold.models import (
     StageRun,
     utcnow,
 )
+from fivefold.operational import current_operational_setting
 from fivefold.prompts import system_prompt
+from fivefold.queueing import QueuePublishError, publish_jobs
 from fivefold.research import live_candidates
 
 
@@ -92,6 +95,7 @@ def enqueue_job(session: Session, prospect: Prospect, stage: Stage) -> Job:
         status="queued",
     )
     session.add(job)
+    session.flush()
     append_audit(
         session,
         "job.queued",
@@ -105,11 +109,14 @@ def enqueue_job(session: Session, prospect: Prospect, stage: Stage) -> Job:
 async def create_research_run(
     session: Session, settings: Settings, request: ResearchRunRequest
 ) -> ResearchRun:
-    max_businesses = min(request.max_businesses, settings.max_prospects, 10)
+    operational = current_operational_setting(session)
+    max_businesses = min(operational.max_prospects_per_run, 10)
     run = ResearchRun(
         location=request.location,
         categories=request.categories,
         max_businesses=max_businesses,
+        operational_setting_id=operational.id,
+        opportunity_threshold=operational.opportunity_score_threshold,
         provider="live",
         status="discovering",
     )
@@ -124,51 +131,78 @@ async def create_research_run(
     session.commit()
 
     try:
-        candidates = await live_candidates(
-            settings, request.location, request.categories, max_businesses
+        existing_place_ids = {
+            place_id
+            for place_id in session.scalars(
+                select(Prospect.place_id).where(Prospect.place_id.is_not(None))
+            ).all()
+            if place_id is not None
+        }
+        candidates, duplicates_skipped = await live_candidates(
+            settings,
+            request.location,
+            request.categories,
+            max_businesses,
+            existing_place_ids,
         )
+        run.duplicates_skipped = duplicates_skipped
+        queued_job_ids: list[str] = []
         for candidate in candidates:
-            prospect = Prospect(
-                research_run_id=run.id,
-                business_name=candidate["business_name"],
-                category=candidate["category"],
-                location=candidate["location"],
-                place_id=candidate.get("place_id"),
-                website_url=candidate.get("website_url"),
-                footprint=candidate["footprint"],
-                qualification_reason=candidate["qualification_reason"],
-                current_stage=Stage.RESEARCHER.value,
-                status="queued",
-            )
-            # Retain only the bounded qualification facts produced by the live adapter;
-            # raw Places responses and reviews are deliberately not stored.
-            prospect.human_note = canonical_json(
-                {
-                    "audit": candidate["audit"],
-                    "review_themes": candidate["review_themes"],
-                    "opportunity_score": candidate["opportunity_score"],
-                }
-            )
-            session.add(prospect)
-            session.flush()
-            session.add(PipelineRun(prospect_id=prospect.id, status="queued"))
-            append_audit(
-                session,
-                "prospect.discovered",
-                "Researcher",
-                {
-                    "name": prospect.business_name,
-                    "category": prospect.category,
-                    "footprint": prospect.footprint,
-                    "place_id": prospect.place_id,
-                    "provider": "live",
-                },
-                prospect.id,
-            )
-            enqueue_job(session, prospect, Stage.RESEARCHER)
+            try:
+                with session.begin_nested():
+                    prospect = Prospect(
+                        research_run_id=run.id,
+                        business_name=candidate["business_name"],
+                        category=candidate["category"],
+                        location=candidate["location"],
+                        place_id=candidate.get("place_id"),
+                        website_url=candidate.get("website_url"),
+                        footprint=candidate["footprint"],
+                        qualification_reason=candidate["qualification_reason"],
+                        current_stage=Stage.RESEARCHER.value,
+                        status="queued",
+                    )
+                    # Retain bounded qualification facts, never the raw Places response.
+                    prospect.human_note = canonical_json(
+                        {
+                            "audit": candidate["audit"],
+                            "review_themes": candidate["review_themes"],
+                            "opportunity_score": candidate["opportunity_score"],
+                        }
+                    )
+                    session.add(prospect)
+                    session.flush()
+                    session.add(PipelineRun(prospect_id=prospect.id, status="queued"))
+                    append_audit(
+                        session,
+                        "prospect.discovered",
+                        "Researcher",
+                        {
+                            "name": prospect.business_name,
+                            "category": prospect.category,
+                            "footprint": prospect.footprint,
+                            "place_id": prospect.place_id,
+                            "provider": "live",
+                        },
+                        prospect.id,
+                    )
+                    queued_job_ids.append(enqueue_job(session, prospect, Stage.RESEARCHER).id)
+                    run.created_count += 1
+            except IntegrityError:
+                run.duplicates_skipped += 1
         run.status = "completed"
         run.completed_at = utcnow()
         session.commit()
+        try:
+            await publish_jobs(settings, queued_job_ids)
+        except QueuePublishError as exc:
+            append_audit(
+                session,
+                "queue.publish_failed",
+                "workflow",
+                {"job_ids": queued_job_ids, "error": str(exc)},
+            )
+            session.commit()
         return run
     except Exception as exc:
         run.status = "failed"
@@ -214,10 +248,12 @@ def latest_revision_feedback(session: Session, prospect_id: str, stage: Stage) -
     return handoff.reason if handoff and handoff.decision.startswith("revise") else None
 
 
-def claim_job(session: Session) -> Job | None:
+def claim_job(session: Session, job_id: str | None = None) -> Job | None:
+    query = select(Job).where(Job.status == "queued", Job.available_at <= utcnow())
+    if job_id:
+        query = query.where(Job.id == job_id)
     job = session.scalar(
-        select(Job)
-        .where(Job.status == "queued", Job.available_at <= utcnow())
+        query
         .order_by(Job.created_at)
         .with_for_update(skip_locked=True)
         .limit(1)
@@ -416,13 +452,37 @@ def _apply_handoff(  # type: ignore[no-untyped-def]
     pipeline: PipelineRun | None,
 ) -> None:
     destination = decision.destination
+    recorded_decision = decision.action.value
+    recorded_reason = decision.reason
     if decision.action == DecisionKind.ADVANCE:
         destination = next_stage(stage)
+        if stage == Stage.RESEARCHER:
+            research_run = session.get(ResearchRun, prospect.research_run_id)
+            threshold = research_run.opportunity_threshold if research_run else 90
+            score = int(artifact.payload["artifact"]["opportunity_score"])
+            append_audit(
+                session,
+                "opportunity.threshold_evaluated",
+                "workflow",
+                {"score": score, "threshold": threshold, "passed": score > threshold},
+                prospect.id,
+            )
+            if score <= threshold:
+                destination = None
+                recorded_decision = "filtered"
+                recorded_reason = (
+                    f"Opportunity score {score} did not exceed the configured threshold "
+                    f"of {threshold}."
+                )
+                prospect.status = "not_qualified"
+                if pipeline:
+                    pipeline.status = "filtered"
+                    pipeline.completed_at = utcnow()
         if destination:
             prospect.current_stage = destination.value
             prospect.status = "queued"
             enqueue_job(session, prospect, destination)
-        else:
+        elif recorded_decision != "filtered":
             prospect.current_stage = stage.value
             prospect.status = "curated"
             if pipeline:
@@ -468,8 +528,8 @@ def _apply_handoff(  # type: ignore[no-untyped-def]
             prospect_id=prospect.id,
             from_stage=stage.value,
             to_stage=destination.value if destination else None,
-            decision=decision.action.value,
-            reason=decision.reason,
+            decision=recorded_decision,
+            reason=recorded_reason,
         )
     )
     append_audit(
@@ -479,8 +539,8 @@ def _apply_handoff(  # type: ignore[no-untyped-def]
         {
             "from": stage.value,
             "to": destination.value if destination else None,
-            "decision": decision.action.value,
-            "reason": decision.reason,
+            "decision": recorded_decision,
+            "reason": recorded_reason,
         },
         prospect.id,
     )
@@ -494,3 +554,58 @@ async def worker_tick(session: Session, settings: Settings, limit: int = 3) -> l
             break
         results.append(await process_job(session, settings, job))
     return results
+
+
+def next_queued_job(session: Session, prospect_id: str) -> Job | None:
+    return session.scalar(
+        select(Job)
+        .where(Job.prospect_id == prospect_id, Job.status == "queued")
+        .order_by(Job.created_at)
+        .limit(1)
+    )
+
+
+async def process_job_by_id(
+    session: Session, settings: Settings, job_id: str
+) -> dict[str, Any]:
+    existing = session.get(Job, job_id)
+    if not existing:
+        raise WorkflowError("Job not found")
+    prospect_id = existing.prospect_id
+    if existing.status in {"completed", "cancelled", "failed"}:
+        successor = next_queued_job(session, prospect_id)
+        return {
+            "job_id": existing.id,
+            "status": existing.status,
+            "next_job_id": successor.id if successor else None,
+        }
+    if existing.status == "running":
+        return {"job_id": existing.id, "status": "running", "next_job_id": None}
+    job = claim_job(session, job_id)
+    if not job:
+        return {"job_id": job_id, "status": "not_ready", "next_job_id": None}
+    result = await process_job(session, settings, job)
+    successor = next_queued_job(session, prospect_id)
+    result["next_job_id"] = successor.id if successor else None
+    return result
+
+
+async def recover_queued_jobs(
+    session: Session, settings: Settings, limit: int = 10
+) -> list[str]:
+    stale_before = utcnow() - timedelta(minutes=5)
+    session.execute(
+        update(Job)
+        .where(Job.status == "running", Job.locked_at < stale_before)
+        .values(status="queued", locked_at=None, available_at=utcnow())
+    )
+    jobs = session.scalars(
+        select(Job)
+        .where(Job.status == "queued", Job.available_at <= utcnow())
+        .order_by(Job.created_at)
+        .limit(max(1, min(limit, 10)))
+    ).all()
+    session.commit()
+    job_ids = [job.id for job in jobs]
+    await publish_jobs(settings, job_ids)
+    return job_ids
