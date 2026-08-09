@@ -26,11 +26,11 @@
   "crons": [
     {
       "path": "/api/worker/tick",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 8 * * *"
     },
     {
       "path": "/api/internal/reset-generated",
-      "schedule": "* * * * *"
+      "schedule": "28 13 * * *"
     }
   ]
 }

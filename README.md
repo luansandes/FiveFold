@@ -46,7 +46,7 @@ Fill `.env.local` before starting. Never commit it.
 - The OpenAI Agents SDK runs the five agents with distinct prompts and typed outputs.
 - Postgres persists idempotent jobs, bounded retries, row-locked claims, and resumability.
 - Vercel Queues delivers stage-ready events. Each completed handoff publishes the next
-  persisted job automatically; a five-minute cron only recovers orphaned events.
+  persisted job automatically; a daily Hobby-compatible cron only recovers orphaned events.
 - Pipeline limits and opportunity thresholds are versioned in the Settings page. New
   research runs default to one prospect and only scores strictly above 90 advance.
 - Generated previews use 30-day revocable bearer links, `noindex`, restrictive CSP,
@@ -76,7 +76,7 @@ vercel dev
 
 Configure every required environment value for development, preview, and production.
 `vercel.json` routes public application paths through FastAPI, registers a private Vercel
-Queue consumer for event-driven handoffs, and defines a five-minute recovery cron. Queue
+Queue consumer for event-driven handoffs, and defines a daily recovery cron. Queue
 delivery uses Vercel OIDC automatically and does not add a sixth model agent.
 
 ## Verification
